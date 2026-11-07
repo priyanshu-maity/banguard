@@ -41,3 +41,80 @@ class WebsiteSecurityResult:
     limitations: list[str] = field(default_factory=list)
 
     error: str | None = None
+
+
+SECURITY_HEADERS = {
+    "strict-transport-security": {
+        "title": "HTTP Strict Transport Security (HSTS)",
+        "severity": Severity.MEDIUM,
+        "impact": (
+            "Without HSTS, browsers may be more vulnerable to "
+            "protocol downgrade and certain man-in-the-middle attacks."
+        ),
+        "remediation": (
+            "Configure Strict-Transport-Security with an appropriate "
+            "max-age value."
+        ),
+    },
+    "content-security-policy": {
+        "title": "Content Security Policy (CSP)",
+        "severity": Severity.MEDIUM,
+        "impact": (
+            "Without a Content Security Policy, browsers have fewer "
+            "restrictions on the sources from which content can load."
+        ),
+        "remediation": (
+            "Configure a Content-Security-Policy that restricts "
+            "trusted content sources and script execution."
+        ),
+    },
+    "x-content-type-options": {
+        "title": "X-Content-Type-Options",
+        "severity": Severity.LOW,
+        "impact": (
+            "Without this header, some browsers may perform MIME "
+            "type sniffing."
+        ),
+        "remediation": (
+            "Set X-Content-Type-Options to nosniff."
+        ),
+    },
+    "x-frame-options": {
+        "title": "X-Frame-Options",
+        "severity": Severity.MEDIUM,
+        "impact": (
+            "Without an appropriate framing policy, the website "
+            "may be more exposed to clickjacking."
+        ),
+        "remediation": (
+            "Set X-Frame-Options to DENY or SAMEORIGIN, or configure "
+            "an appropriate frame-ancestors directive in CSP."
+        ),
+    },
+    "referrer-policy": {
+        "title": "Referrer-Policy",
+        "severity": Severity.LOW,
+        "impact": (
+            "Without a referrer policy, URLs or other referrer "
+            "information may be shared more broadly than intended."
+        ),
+        "remediation": (
+            "Configure a suitable Referrer-Policy, such as "
+            "strict-origin-when-cross-origin."
+        ),
+    },
+    "permissions-policy": {
+        "title": "Permissions-Policy",
+        "severity": Severity.LOW,
+        "impact": (
+            "Without this header, browser features are not explicitly "
+            "restricted through Permissions-Policy."
+        ),
+        "remediation": (
+            "Configure Permissions-Policy to restrict browser "
+            "features that the website does not need."
+        ),
+    },
+}
+
+
