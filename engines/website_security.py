@@ -6,15 +6,16 @@ from urllib.parse import urlsplit
 
 @dataclass
 class WebsiteSecurityResult:
-    url: str
-    url_valid: bool | None = None
     publicly_resolvable: bool | None = None
     resolved_ips: list[str] = field(default_factory=list)
+    security_headers: dict[str, bool | None] = field(default_factory=dict)
+    issues: list[str] = field(default_factory=list)
     error: str | None = None
+
 
 def is_public_ip(address: str) -> bool:
     try:
-        ip = ip_address(address)
-        return ip.is_global
+        return ip_address(address).is_global
     except ValueError:
         return False
+
