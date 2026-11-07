@@ -146,3 +146,75 @@ def safe_fetch(url: str, first_hop_ips: list[str] | None = None) -> FetchedPage:
     deadline = time.monotonic() + TOTAL_TIMEOUT_SECONDS
     current_url = url
     hops: list[RedirectHop] = []
+
+    for hop in range(MAX_REDIRECTS + 1):
+        if time.monotonic() > deadline:
+            raise FetchError("connect", "Overall time limit exceeded.", hop, hops)
+
+        parts = urlsplit(current_url)
+        scheme = parts.scheme.lower()
+
+        if scheme not in ("http", "https") or not parts.hostname:
+            raise FetchError(
+                "unsupported",
+                f"Unsupported redirect target: {current_url}",
+                hop,
+                hops,
+            )
+
+        try:
+            port = parts.port or (443 if scheme == "https" else 80)
+            hostname = normalise_hostname(parts.hostname)
+        except ValueError as error:
+            raise FetchError(
+                "unsupported", f"Invalid URL: {error}", hop, hops
+            ) from error
+
+        if port not in ALLOWED_PORTS:
+            raise FetchError(
+                "unsupported",
+                f"Port {port} is not allowed for inspection.",
+                hop,
+                hops,
+            )
+
+        if hop == 0 and first_hop_ips is not None:
+            ips = first_hop_ips
+        else:
+            try:
+                ips = resolve_public_ips(hostname)
+            except NonPublicAddressError as error:
+                raise FetchError(
+                    "blocked",
+                    f"{current_url} resolves to a non-public address "
+                    f"({error.address}).",
+                    hop,
+                    hops,
+                ) from error
+            except ResolutionError as error:
+                raise FetchError(
+                    "dns",
+                    f"{current_url} could not be resolved: {error}",
+                    hop,
+                    hops,
+                ) from error
+
+        target = parts.path or "/"
+        if parts.query:
+            target += "?" + parts.query
+
+        status_code, headers = _request_once(
+            scheme, hostname, port, ips, target, hop, hops
+        )
+        hops.append(RedirectHop(current_url, status_code, ips))
+
+        location = headers.get("location")
+        if status_code in REDIRECT_STATUS_CODES and location:
+            current_url = urljoin(current_url, location)
+            continue
+
+        return FetchedPage(current_url, status_code, headers, ips, hops)
+
+    raise FetchError(
+        "redirect", f"More than {MAX_REDIRECTS} redirects.", MAX_REDIRECTS, hops
+    )
