@@ -162,3 +162,84 @@ def _generate_header_findings(header_results: dict[str, bool | None],) -> list[S
         )
 
     return findings
+
+
+def analyze_website_security(url: str, investigation_id: str,) -> AnalysisResult[WebsiteSecurityResult]:
+    """
+    Perform the MVP website security analysis.
+
+    1. Resolve and validate the initial hostname.
+    2. Safely fetch the website using the existing fetcher.
+    3. Inspect the final HTTP response headers.
+    4. Generate findings for missing security headers.
+    """
+
+    result = WebsiteSecurityResult()
+
+    try:
+        parsed_url = urlsplit(url)
+
+        if not parsed_url.hostname:
+            raise ValueError("URL does not contain a hostname.")
+
+        hostname = normalise_hostname(parsed_url.hostname)
+        result.resolved_ips = resolve_public_ips(hostname)
+        result.publicly_resolvable = True
+        result.checks_completed.append("public_resolvability")
+
+        fetched_page = safe_fetch(url, first_hop_ips=result.resolved_ips,)
+
+        result.final_url = fetched_page.final_url
+        result.status_code = fetched_page.status_code
+        result.checks_completed.append("http_fetch")
+
+        final_scheme = urlsplit(fetched_page.final_url).scheme
+        result.security_headers = _check_security_headers(fetched_page.headers, is_https=(final_scheme == "https"),)
+        result.findings.extend(_generate_header_findings(result.security_headers))
+        result.checks_completed.append("security_headers")
+
+        result.limitations.extend([
+            "Only HTTP response headers were inspected. "
+            "The response body and page content were not analysed.",
+            "Security header checks verify presence only. "
+            "They do not validate the quality of individual directives.",
+            "A website passing these checks is not guaranteed to be safe.",
+        ])
+
+        return AnalysisResult(investigation_id=investigation_id, module="M5", status=AnalysisStatus.COMPLETED, data=result,)
+
+    except NonPublicAddressError as error:
+        result.publicly_resolvable = False
+        result.error = str(error)
+
+        result.checks_completed.append("public_resolvability")
+
+        return AnalysisResult(investigation_id=investigation_id, module="M5", status=AnalysisStatus.FAILED, data=result, error=str(error),)
+
+    except ResolutionError as error:
+        result.error = f"DNS resolution failed: {error}"
+
+        result.limitations.append(
+            "Website fetching was skipped because public DNS "
+            "resolution could not be completed."
+        )
+
+        return AnalysisResult(investigation_id=investigation_id, module="M5", status=AnalysisStatus.FAILED, data=result, error=result.error,)
+
+    except FetchError as error:
+        result.error = error.message
+
+        if error.hops:
+            result.final_url = error.hops[-1].url
+
+        result.limitations.append(
+            "Website fetching or redirect validation did not complete. "
+            "Security header checks were not completed."
+        )
+
+        return AnalysisResult(investigation_id=investigation_id, module="M5", status=AnalysisStatus.PARTIAL, data=result, error=error.message,)
+
+    except (ValueError, TypeError) as error:
+        result.error = str(error)
+
+        return AnalysisResult(investigation_id=investigation_id, module="M5", status=AnalysisStatus.FAILED, data=result, error=str(error),)
