@@ -38,3 +38,12 @@ class FetchedPage:
     @property
     def redirect_count(self) -> int:
         return len(self.hops) - 1
+
+
+class FetchError(Exception):
+    def __init__(self, kind: str, message: str, hop: int = 0, hops: list[RedirectHop] | None = None,):
+        super().__init__(message)
+        self.kind = kind
+        self.message = message
+        self.hop = hop
+        self.hops = hops if hops is not None else []
