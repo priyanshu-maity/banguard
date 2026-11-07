@@ -6,7 +6,8 @@ import httpx
 import tldextract
 import math
 import unicodedata
-
+import dns.resolver
+import dns.exception
 from rapidfuzz import fuzz
 from confusable_homoglyphs import confusables
 
@@ -33,10 +34,6 @@ class URLAnalysisResult:
     decoded_fragment: str | None = None
 
     has_userinfo: bool = False
-
-    # DNS information
-    ip_addresses: list[str] = field(default_factory=list)
-    dns_records: list[str] = field(default_factory=list)
 
     # Domain characteristics
     unusually_long_domain: bool = False
@@ -77,9 +74,26 @@ class URLAnalysisResult:
     domain_entropy: float = 0.0
     high_domain_entropy: bool = False
 
-    # DNS characteristics
+    # DNS information
+    ip_addresses: list[str] = field(default_factory=list)
+    dns_records: list[str] = field(default_factory=list)
+    dns_ttls: dict[str, list[int]] = field(default_factory=dict)
+
+    missing_mx_record: bool = False
+    low_dns_ttl: bool = False
+    unusual_nameservers: list[str] = field(default_factory=list)
+
     non_public_ip_resolution: bool = False
     dns_resolution_failed: bool = False
+
+    # Domain registration information
+    domain_age_days: int | None = None
+    registrar: str | None = None
+    creation_date: str | None = None
+    expiration_date: str | None = None
+
+    # IP intelligence
+    ip_intelligence: list[dict] = field(default_factory=list)
 
     # Redirect characteristics
     redirect_chain: list[str] = field(default_factory=list)
@@ -498,27 +512,114 @@ class URLAnalyzer:
     def _check_dns(self):
         domain = self.result.domain
 
-        try:
-            records = socket.getaddrinfo(
-                domain,
-                None,
-                type=socket.SOCK_STREAM
-            )
+        record_types = (
+            'A',
+            'AAAA',
+            'MX',
+            'NS',
+            'TXT',
+            'CNAME'
+        )
 
-            addresses = list(set(
-                record[4][0] for record in records
-            ))
+        resolver = dns.resolver.Resolver()
+        resolver.timeout = 3
+        resolver.lifetime = 5
 
-            self.result.ip_addresses = addresses
+        addresses = set()
+        nameservers = []
 
-            for address in addresses:
+        for record_type in record_types:
 
-                ip = ipaddress.ip_address(address)
+            try:
+                answer = resolver.resolve(
+                    domain,
+                    record_type,
+                    lifetime=5
+                )
 
-                if not ip.is_global:
-                    self.result.non_public_ip_resolution = True
+                # Store TTL values
+                ttl = answer.rrset.ttl
 
-        except socket.gaierror:
+                self.result.dns_ttls.setdefault(
+                    record_type, []
+                ).append(ttl)
+
+                # Detect unusually low TTL
+                if ttl < 300:
+                    self.result.low_dns_ttl = True
+
+                # Store DNS records
+                for record in answer:
+
+                    record_value = record.to_text()
+
+                    self.result.dns_records.append(
+                        f'{record_type}: {record_value}'
+                    )
+
+                    # Extract IP addresses
+                    if record_type in ('A', 'AAAA'):
+                        addresses.add(record_value)
+
+                    # Collect nameservers
+                    elif record_type == 'NS':
+                        nameservers.append(
+                            record_value.rstrip('.').lower()
+                        )
+
+            except dns.resolver.NoAnswer:
+                continue
+
+            except dns.resolver.NXDOMAIN:
+                self.result.dns_resolution_failed = True
+                break
+
+            except dns.exception.DNSException:
+                continue
+
+        # Store resolved IP addresses
+        self.result.ip_addresses = sorted(addresses)
+
+        # Detect missing MX records
+        self.result.missing_mx_record = not any(
+            record.startswith('MX: ')
+            for record in self.result.dns_records
+        )
+
+        # Check nameserver characteristics
+        for nameserver in nameservers:
+
+            try:
+                ipaddress.ip_address(nameserver)
+
+                self.result.unusual_nameservers.append(
+                    nameserver
+                )
+
+                continue
+
+            except ValueError:
+                pass
+
+            if (
+                    '.' not in nameserver or
+                    '_' in nameserver or
+                    'xn--' in nameserver
+            ):
+                self.result.unusual_nameservers.append(
+                    nameserver
+                )
+
+        # Check whether resolved IPs are publicly routable
+        for address in self.result.ip_addresses:
+
+            ip = ipaddress.ip_address(address)
+
+            if not ip.is_global:
+                self.result.non_public_ip_resolution = True
+
+        # No usable A or AAAA resolution
+        if not self.result.ip_addresses:
             self.result.dns_resolution_failed = True
 
     def _inspect_redirects(self):
