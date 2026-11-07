@@ -59,16 +59,13 @@ def is_public_ip(address: str) -> bool:
 
     return ip.is_global and not ip.is_multicast
 
+
 def check_public_resolvability(hostname: str) -> WebsiteSecurityResult:
     result = WebsiteSecurityResult()
 
     try:
-        addresses = getaddrinfo(
-            hostname,
-            None,
-            type=SOCK_STREAM
-        )
-
+        hostname = normalise_hostname(hostname)
+        addresses = getaddrinfo(hostname, None, type=SOCK_STREAM)
         result.resolved_ips = list(
             dict.fromkeys(address[4][0] for address in addresses)
         )
@@ -77,17 +74,21 @@ def check_public_resolvability(hostname: str) -> WebsiteSecurityResult:
             raise ValueError("Hostname did not resolve to any IP address.")
 
     except (OSError, ValueError) as error:
-        result.publicly_resolvable = False
         result.error = f"DNS resolution failed: {error}"
+        result.limitations.append(
+            "Network safety check could not be completed because DNS "
+            "resolution failed."
+        )
         return result
 
     for address in result.resolved_ips:
         if not is_public_ip(address):
             result.publicly_resolvable = False
             result.error = f"Non-public IP address detected: {address}"
+            result.checks_completed.append("public_resolvability")
             return result
 
     result.publicly_resolvable = True
+    result.checks_completed.append("public_resolvability")
 
     return result
-
