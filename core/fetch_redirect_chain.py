@@ -128,3 +128,21 @@ def _request_once(scheme: str, hostname: str, port: int, ips: list[str], target:
     raise FetchError(
         "connect", f"Could not connect to {hostname}: {last_error}", hop, hops
     )
+
+
+def safe_fetch(url: str, first_hop_ips: list[str] | None = None) -> FetchedPage:
+    """Fetch a URL's headers, following redirects manually and safely.
+
+    Every hop is resolved, checked for public addresses and connected to by
+    IP, so a redirect cannot lead us to an internal address and DNS cannot
+    change between the check and the connection (DNS rebinding).
+
+    first_hop_ips lets a caller that has already verified the first hostname
+    reuse those IPs; otherwise the first hop is resolved here.
+
+    Only the status line and headers are read, never the response body.
+    Raises FetchError on any failure.
+    """
+    deadline = time.monotonic() + TOTAL_TIMEOUT_SECONDS
+    current_url = url
+    hops: list[RedirectHop] = []
