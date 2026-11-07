@@ -94,3 +94,45 @@ def is_public_ip(address: str) -> bool:
         return ip.is_global
 
     return ip.is_global
+
+
+def resolve_public_ips(hostname: str) -> list[str]:
+    """
+    Resolve a hostname and return its public IP addresses.
+
+    The entire resolution is rejected if even one returned address
+    is non-public. This prevents selecting a public address while
+    ignoring an unsafe answer from the same hostname.
+    """
+
+    hostname = normalise_hostname(hostname)
+
+    try:
+        ip = ip_address(hostname)
+        addresses = [ip.compressed]
+    except ValueError:
+        try:
+            records = getaddrinfo(
+                hostname,
+                None,
+                type=SOCK_STREAM,
+            )
+        except (gaierror, OSError) as error:
+            raise ResolutionError(
+                f"Could not resolve hostname '{hostname}': {error}"
+            ) from error
+
+        addresses = list(
+            dict.fromkeys(record[4][0] for record in records)
+        )
+
+    if not addresses:
+        raise ResolutionError(
+            f"Hostname '{hostname}' did not resolve to any IP addresses."
+        )
+
+    for address in addresses:
+        if not is_public_ip(address):
+            raise NonPublicAddressError(address)
+
+    return addresses
