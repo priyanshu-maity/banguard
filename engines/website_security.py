@@ -11,3 +11,10 @@ class WebsiteSecurityResult:
     publicly_resolvable: bool | None = None
     resolved_ips: list[str] = field(default_factory=list)
     error: str | None = None
+
+def is_public_ip(address: str) -> bool:
+    try:
+        ip = ip_address(address)
+        return ip.is_global
+    except ValueError:
+        return False
