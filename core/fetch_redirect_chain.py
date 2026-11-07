@@ -84,3 +84,47 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
         except Exception:
             sock.close()
             raise
+
+def _request_once(scheme: str, hostname: str, port: int, ips: list[str], target: str, hop: int, hops: list[RedirectHop],) -> tuple[int, dict[str, str]]:
+    """Send one GET to a verified IP and read only the status and headers."""
+    connection_class = (
+        _PinnedHTTPSConnection if scheme == "https" else _PinnedHTTPConnection
+    )
+    last_error: Exception | None = None
+
+    for ip in ips:
+        connection = connection_class(hostname, port, ip, REQUEST_TIMEOUT_SECONDS)
+        try:
+            connection.request(
+                "GET",
+                target,
+                headers={
+                    "User-Agent": USER_AGENT,
+                    "Accept": "*/*",
+                    "Connection": "close",
+                },
+            )
+            response = connection.getresponse()
+
+            headers: dict[str, str] = {}
+            for name, value in response.getheaders():
+                key = name.lower()
+                headers[key] = f"{headers[key]}, {value}" if key in headers else value
+
+            return response.status, headers
+
+        except ssl.SSLError as error:
+            raise FetchError(
+                "tls",
+                f"TLS connection to {hostname} failed: {error}",
+                hop,
+                hops,
+            ) from error
+        except (OSError, http.client.HTTPException) as error:
+            last_error = error
+        finally:
+            connection.close()
+
+    raise FetchError(
+        "connect", f"Could not connect to {hostname}: {last_error}", hop, hops
+    )
