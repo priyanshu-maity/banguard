@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from urllib.parse import urlsplit
 
-from core.schemas import AnalysisResult, AnalysisStatus
+from core.schema import AnalysisResult, AnalysisStatus
 from core.network_safety import (
     NonPublicAddressError,
     ResolutionError,
