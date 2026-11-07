@@ -18,3 +18,23 @@ MAX_REDIRECTS = 5
 ALLOWED_PORTS = {80, 443, 8080, 8443}
 REDIRECT_STATUS_CODES = {301, 302, 303, 307, 308}
 USER_AGENT = "BanGuard-SecurityCheck/1.0"
+
+
+@dataclass
+class RedirectHop:
+    url: str
+    status_code: int
+    resolved_ips: list[str]
+
+
+@dataclass
+class FetchedPage:
+    final_url: str
+    status_code: int
+    headers: dict[str, str]
+    resolved_ips: list[str]
+    hops: list[RedirectHop]
+
+    @property
+    def redirect_count(self) -> int:
+        return len(self.hops) - 1
