@@ -137,3 +137,28 @@ def _check_security_headers(headers: dict[str, str], is_https: bool,) -> dict[st
 
     return results
 
+def _generate_header_findings(header_results: dict[str, bool | None],) -> list[SecurityFinding]:
+    """Generate findings for missing security headers."""
+
+    findings = []
+
+    for header_name, present in header_results.items():
+        if present is not False:
+            continue
+
+        details = SECURITY_HEADERS[header_name]
+
+        findings.append(
+            SecurityFinding(
+                title=f"Missing {details['title']} header",
+                severity=details["severity"],
+                evidence=(
+                    f"The HTTP response did not contain "
+                    f"the {header_name} header."
+                ),
+                impact=details["impact"],
+                remediation=details["remediation"],
+            )
+        )
+
+    return findings
