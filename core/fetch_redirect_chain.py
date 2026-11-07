@@ -60,3 +60,27 @@ class _PinnedHTTPConnection(http.client.HTTPConnection):
         self.sock = socket.create_connection(
             (self._pinned_ip, self.port), self.timeout
         )
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """Connects to a pre-verified IP, but still verifies the certificate
+    against the original hostname (SNI and hostname check)."""
+
+    def __init__(self, hostname: str, port: int, pinned_ip: str, timeout: float):
+        self._tls_context = ssl.create_default_context()
+        super().__init__(
+            hostname, port, timeout=timeout, context=self._tls_context
+        )
+        self._pinned_ip = pinned_ip
+
+    def connect(self):
+        sock = socket.create_connection(
+            (self._pinned_ip, self.port), self.timeout
+        )
+        try:
+            self.sock = self._tls_context.wrap_socket(
+                sock, server_hostname=self.host
+            )
+        except Exception:
+            sock.close()
+            raise
