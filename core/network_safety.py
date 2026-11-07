@@ -64,3 +64,33 @@ def normalise_hostname(hostname: str) -> str:
             raise ValueError(f"Invalid hostname label: {label}")
 
     return hostname
+
+
+def is_public_ip(address: str) -> bool:
+    """
+    Return True only when the address is globally routable.
+
+    Private, loopback, link-local, reserved, multicast and other
+    non-global addresses are rejected.
+    """
+
+    if not isinstance(address, str):
+        return False
+    if "%" in address:
+        return False
+
+    try:
+        ip = ip_address(address)
+    except ValueError:
+        return False
+
+    if isinstance(ip, IPv6Address):
+        if ip.ipv4_mapped is not None:
+            ip = ip.ipv4_mapped
+        elif ip in _NAT64_NETWORK:
+            return False
+
+    if isinstance(ip, IPv4Address):
+        return ip.is_global
+
+    return ip.is_global
