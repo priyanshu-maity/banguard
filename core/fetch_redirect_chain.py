@@ -47,3 +47,16 @@ class FetchError(Exception):
         self.message = message
         self.hop = hop
         self.hops = hops if hops is not None else []
+
+
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    """Connects to a pre-verified IP instead of resolving the hostname again."""
+
+    def __init__(self, hostname: str, port: int, pinned_ip: str, timeout: float):
+        super().__init__(hostname, port, timeout=timeout)
+        self._pinned_ip = pinned_ip
+
+    def connect(self):
+        self.sock = socket.create_connection(
+            (self._pinned_ip, self.port), self.timeout
+        )
