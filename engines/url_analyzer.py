@@ -1,4 +1,3 @@
-
 from dataclasses import dataclass, field
 from urllib.parse import urlparse, urlunparse
 from difflib import SequenceMatcher
@@ -25,9 +24,22 @@ class URLAnalyzer:
         self.url = url
         self.result = URLAnalysisResult(normalized_url=url)
 
-    def normalize_url(self):
-        ...
+    def _normalize_url(self):
+        url = self.url.strip()
+
+        if not url:
+            raise ValueError('URL cannot be empty')
+
+        parsed = urlparse(url)
+
+        if parsed.scheme.lower() not in ('http', 'https'):
+            raise ValueError('Only HTTP and HTTPS URLs are supported')
+
+        if not parsed.hostname:
+            raise ValueError('URL must contain a hostname')
+
+        if any(char.isspace() or ord(char) < 32 for char in url):
+            raise ValueError('URL contains invalid whitespace or control characters')
 
     def inspect_url(self):
         ...
-        
