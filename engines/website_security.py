@@ -35,6 +35,13 @@ class WebsiteSecurityResult:
     error: str | None = None
 
 
+def normalise_hostname(hostname: str) -> str:
+    hostname = hostname.strip().rstrip(".").lower()
+
+    if not hostname:
+        raise ValueError("Hostname is empty.")
+    return hostname.encode("idna").decode("ascii")
+
 def is_public_ip(address: str) -> bool:
     try:
         return ip_address(address).is_global
