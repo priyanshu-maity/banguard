@@ -1,8 +1,10 @@
 from dataclasses import dataclass, field
-from ipaddress import ip_address
+from ipaddress import IPv6Address, ip_address, ip_network
 from socket import getaddrinfo, SOCK_STREAM
 from urllib.parse import urlsplit
 
+
+_NAT64_NETWORK = ip_network("64:ff9b::/96")
 
 class Severity(str, Enum):
     LOW = "low"
@@ -42,11 +44,20 @@ def normalise_hostname(hostname: str) -> str:
         raise ValueError("Hostname is empty.")
     return hostname.encode("idna").decode("ascii")
 
+
 def is_public_ip(address: str) -> bool:
     try:
-        return ip_address(address).is_global
+        ip = ip_address(address.split("%")[0])
     except ValueError:
         return False
+
+    if isinstance(ip, IPv6Address):
+        if ip.ipv4_mapped is not None:
+            ip = ip.ipv4_mapped
+        elif ip in _NAT64_NETWORK:
+            return False
+
+    return ip.is_global and not ip.is_multicast
 
 def check_public_resolvability(hostname: str) -> WebsiteSecurityResult:
     result = WebsiteSecurityResult()
