@@ -117,4 +117,23 @@ SECURITY_HEADERS = {
     },
 }
 
+def _check_security_headers(headers: dict[str, str], is_https: bool,) -> dict[str, bool | None]:
+    """
+    Check whether the six expected security headers are present.
+
+    HSTS is not applicable to an HTTP response, so its value
+    is None when the final URL uses HTTP.
+    """
+
+    results = {}
+
+    for header_name in SECURITY_HEADERS:
+        if header_name == "strict-transport-security" and not is_https:
+            results[header_name] = None
+            continue
+
+        value = headers.get(header_name)
+        results[header_name] = bool(value and value.strip())
+
+    return results
 
