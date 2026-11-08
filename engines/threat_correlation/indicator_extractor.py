@@ -4,11 +4,7 @@ from urllib.parse import urlparse
 from engines.url_analyzer.analysis_result import URLAnalysisResult
 from engines.url_analyzer.url_normalizer import URLNormalizer
 
-from .schema import (
-    IndicatorType,
-    IndicatorSource,
-    SharedIndicator,
-)
+from .schema import (IndicatorType, IndicatorSource, SharedIndicator,)
 
 
 def _unwrap_result(result):
@@ -65,9 +61,7 @@ def _add_url(indicators: dict, url: str, investigation_id: str, module: str,):
 
     if normalized_url is None:
         return
-
     _add_indicator(indicators, IndicatorType.URL, normalized_url, investigation_id, module,)
-
     if domain:
         _add_indicator(indicators, IndicatorType.DOMAIN, domain, investigation_id, module,)
 
@@ -77,5 +71,68 @@ def _add_ip(indicators: dict, value: str, investigation_id: str, module: str,):
         normalized_ip = str(ipaddress.ip_address(value.strip()))
     except ValueError:
         return
-
     _add_indicator(indicators, IndicatorType.IP_ADDRESS, normalized_ip, investigation_id, module,)
+
+
+def extract_indicators(investigation_id: str, original_url: str, m1_result=None, m2_result=None, m3_result=None, m5_result=None,) -> list[SharedIndicator]:
+    indicators = {}
+
+    # Original investigation URL
+    _add_url(indicators, original_url, investigation_id,"INPUT",)
+
+    # Unwrap module results
+    m1 = _unwrap_result(m1_result)
+    m3 = _unwrap_result(m3_result)
+    m5 = _unwrap_result(m5_result)
+
+    # M1: URL analysis
+    if m1 is not None:
+        if m1.uses_ip_address[0]:
+            _add_ip(indicators, m1.uses_ip_address[1], investigation_id,"M1",)
+
+        for url in m1.redirect_chain[1]:
+            _add_url(indicators, url, investigation_id, "M1")
+
+        for domain in m1.cross_domain_redirect[1]:
+            normalized_domain = _normalize_domain(domain)
+            if normalized_domain:
+                _add_indicator(indicators, IndicatorType.DOMAIN, normalized_domain, investigation_id, "M1",)
+
+        for domain in m1.url_shortener_detected[1]:
+            normalized_domain = _normalize_domain(domain)
+            if normalized_domain:
+                _add_indicator(indicators, IndicatorType.DOMAIN, normalized_domain, investigation_id, "M1",)
+
+        for value in m1.ssrf_attempt_detected[1]:
+            try:
+                ipaddress.ip_address(value.strip())
+                _add_ip(indicators, value, investigation_id, "M1")
+            except ValueError:
+                normalized_domain = _normalize_domain(value)
+                if normalized_domain:
+                    _add_indicator(indicators, IndicatorType.DOMAIN, normalized_domain, investigation_id, "M1",)
+
+    # M3: Message analysis
+    if m3 is not None:
+        for url in m3.urls_extracted[1]:
+            _add_url(indicators, url, investigation_id, "M3")
+
+        for email in m3.emails_extracted[1]:
+            _add_indicator(indicators, IndicatorType.EMAIL, email.lower(), investigation_id, "M3",)
+
+        for phone in m3.phone_numbers_extracted[1]:
+            normalized_phone = "".join(char for char in phone if char.isdigit() or char == "+")
+            _add_indicator(indicators, IndicatorType.PHONE_NUMBER, normalized_phone, investigation_id, "M3",)
+
+        for upi_id in m3.upi_ids_extracted[1]:
+            _add_indicator(indicators, IndicatorType.UPI_ID, upi_id.lower(), investigation_id, "M3",)
+
+    # M5: Website security analysis
+    if m5 is not None:
+        if m5.final_url:
+            _add_url(indicators, m5.final_url, investigation_id, "M5",)
+
+        for ip in m5.resolved_ips:
+            _add_ip(indicators, ip, investigation_id, "M5",)
+
+    return list(indicators.values())
