@@ -20,3 +20,14 @@ def _unwrap_result(result):
         return result.data
 
     return result
+
+def _normalize_url(url: str) -> tuple[str | None, str | None]:
+    """Return the normalized URL and its domain."""
+    try:
+        normalizer = URLNormalizer(url, URLAnalysisResult())
+        normalized_url = normalizer.normalize()
+
+        return normalized_url, normalizer.domain
+
+    except (ValueError, AttributeError, TypeError):
+        return None, None
