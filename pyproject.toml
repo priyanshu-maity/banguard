@@ -10,6 +10,7 @@ dependencies = [
     "httpx>=0.28",
     "idna>=3.20",
     "pydantic>=2.10",
+    "python-whois>=0.9.6",
     "rapidfuzz>=3.14.6",
     "tldextract>=5.4.0",
 ]
