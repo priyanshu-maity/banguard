@@ -149,5 +149,27 @@ def _collect_m5(output, result):
     if data.error:
         _add_evidence(output, f"Website security analysis error: {data.error}", "M5")
 
+def collect_assessment_evidence(investigation_id, original_url, m1_result=None, m2_results=None, m3_result=None, m4_result=None, m5_result=None):
+    """Collect module findings and reuse M4 for all indicator extraction."""
 
+    output = AssessmentEvidence()
+    _record_status(output, "M1", m1_result)
+    _record_status(output, "M3", m3_result)
+    _record_status(output, "M4", m4_result)
+    _record_status(output, "M5", m5_result)
 
+    for url, result in (m2_results or {}).items():
+        _record_status(output, "M2", result, url)
+
+    _collect_m1(output, m1_result)
+    _collect_m2(output, m2_results)
+    _collect_m4(output, m4_result)
+    _collect_m5(output, m5_result)
+
+    shared_indicators = extract_indicators(investigation_id=investigation_id, original_url=original_url, m1_result=m1_result, m2_result=None, m3_result=m3_result, m5_result=m5_result,)
+
+    for shared in shared_indicators:
+        for source in shared.sources:
+            output.indicators.append(ReportIndicator(indicator_type=shared.indicator_type.value, value=shared.value, source_module=source.module,))
+
+    return output
