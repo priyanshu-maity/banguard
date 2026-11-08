@@ -49,7 +49,60 @@ function Ledger({ r }: { r: ThreatReport }) {
   )
 }
 
-export default function Dossier({ a }: { a: ThreatReport }) {
+type Mark = { needle: string; title: string; reason: string; sev: string; kind: 'phrase' | 'indicator' }
+const rank = (s: string) => SEV.length - SEV.indexOf(s)
+
+function Highlighter({ text, findings, indicators }: { text: string; findings: ThreatReport['findings']; indicators: ThreatReport['indicators'] }) {
+  const marks: Mark[] = []
+  findings.filter(f => f.source_module === 'M3').forEach(f => {
+    const i = f.description.indexOf('Evidence:'); if (i < 0) return
+    const reason = f.description.slice(0, i).trim()
+    f.description.slice(i + 9).split('; ').map(s => s.trim()).filter(s => s && !s.startsWith('No exact evidence'))
+      .forEach(needle => marks.push({ needle, title: f.title, reason, sev: f.severity.toLowerCase(), kind: 'phrase' }))
+  })
+  indicators.forEach(x => marks.push({ needle: x.value, title: 'Extracted ' + x.indicator_type.replace(/_/g, ' '), reason: 'Pulled out of the message and checked by ' + mod(x.source_module) + '.', sev: 'info', kind: 'indicator' }))
+
+  const found: { s: number; e: number; m: Mark }[] = [], missed: Mark[] = []
+  marks.forEach(m => {
+    const re = new RegExp(m.needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+'), 'gi')
+    let hit = false
+    for (const x of text.matchAll(re)) { if (!x[0]) continue; found.push({ s: x.index!, e: x.index! + x[0].length, m }); hit = true }
+    if (!hit && m.kind === 'phrase') missed.push(m)
+  })
+  // strongest, then longest, wins when marks overlap
+  const keep: typeof found = []
+  ;[...found].sort((a, b) => rank(b.m.sev) - rank(a.m.sev) || (b.e - b.s) - (a.e - a.s))
+    .forEach(c => { if (!keep.some(k => c.s < k.e && c.e > k.s)) keep.push(c) })
+  keep.sort((a, b) => a.s - b.s)
+
+  const parts: React.ReactNode[] = []; let pos = 0
+  keep.forEach((r, k) => {
+    if (r.s > pos) parts.push(text.slice(pos, r.s))
+    parts.push(
+      <mark key={k} tabIndex={0} className={'hl ' + (r.m.kind === 'indicator' ? 'h-ind' : 'h-' + r.m.sev)}>
+        {text.slice(r.s, r.e)}<span role="tooltip" className="tip"><b>{r.m.title}</b>{r.m.reason}</span>
+      </mark>)
+    pos = r.e
+  })
+  parts.push(text.slice(pos))
+  const count = (f: (m: Mark) => boolean) => keep.filter(k => f(k.m)).length
+  return (
+    <>
+      <div className="legend">
+        <span className="lg h-high">strong signal · {count(m => m.kind === 'phrase' && m.sev === 'high')}</span>
+        <span className="lg h-medium">moderate · {count(m => m.kind === 'phrase' && m.sev === 'medium')}</span>
+        <span className="lg h-low">mild · {count(m => m.kind === 'phrase' && m.sev === 'low')}</span>
+        <span className="lg h-ind">link, number or address · {count(m => m.kind === 'indicator')}</span>
+      </div>
+      <p className="msg">{parts}</p>
+      <p className="dim sm">Hover or tab to a highlight to see why it was marked. Suspicious wording is a signal, not proof of fraud.</p>
+      {keep.length === 0 && <p className="dim sm">Nothing in the text was marked. That does not mean the message is safe.</p>}
+      {missed.length > 0 && <p className="dim sm">Flagged by the analyser but not found word for word in your text: {missed.map(m => `“${m.needle}”`).join(', ')}.</p>}
+    </>
+  )
+}
+
+export default function Dossier({ a, message }: { a: ThreatReport; message?: string }) {
   const risk = riskOf(a.risk_level), m = META[risk]
   const sorted = [...a.findings].sort((x, y) => SEV.indexOf(x.severity.toLowerCase()) - SEV.indexOf(y.severity.toLowerCase()))
   const cert = sorted.filter(f => f.source_module === 'M2'), other = sorted.filter(f => f.source_module !== 'M2')
@@ -72,6 +125,7 @@ export default function Dossier({ a }: { a: ThreatReport }) {
         <p className="meta">Checked {new Date(a.created_at).toLocaleString()} · report {a.report_id.slice(0, 8)} · investigation {a.investigation_id.slice(0, 8)}</p>
       </header>
       <section className="block"><h3>What we found</h3><p className="lead">{a.summary}</p></section>
+      {message && <section className="block"><h3>Your message, marked up</h3><Highlighter text={message} findings={a.findings} indicators={a.indicators} /></section>}
       {Object.keys(status).length > 0 && <section className="block"><h3>Checks that ran</h3>
         <div className="feeds">{Object.entries(status).map(([k, s]) => <span key={k} className={'st-' + s}>{MOD[k] ?? k}: {s.replace(/_/g, ' ')}</span>)}</div></section>}
       {redirects.length > 0 && <section className="block"><h3>Where the link really goes</h3><Chain urls={redirects} /></section>}

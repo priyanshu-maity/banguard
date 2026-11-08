@@ -15,9 +15,10 @@ export default function App() {
   const [step, setStep] = useState(-1)
   const [res, setRes] = useState<ThreatReport>()
   const [err, setErr] = useState('')
+  const [sub, setSub] = useState<{ kind: string; text: string }>()
   const go = async () => {
     if (!text.trim()) { setErr(kind === 'url' ? 'Paste a link or domain to check.' : 'Paste the message you received.'); return }
-    setErr(''); setRes(undefined); setStep(0)
+    setErr(''); setRes(undefined); setStep(0); setSub({ kind, text: text.trim() })
     const t = setInterval(() => setStep(s => Math.min(s + 1, STEPS.length - 1)), 520)
     try { setRes(await analyze(kind, text.trim())) } catch { setErr('The investigation failed. Check that the backend is running.') }
     clearInterval(t); setStep(-1)
@@ -53,7 +54,7 @@ export default function App() {
           </section>
         )}
         {!res && step < 0 && <div className="empty"><div className="strip big"><div className="bar" /></div><h2>Is it safe?</h2><p className="dim">Submit a link or message. You get a verdict, the evidence behind it, and what we could not check.</p></div>}
-        {res && step < 0 && <Dossier a={res} />}
+        {res && step < 0 && <Dossier a={res} message={sub?.kind === 'message' ? sub.text : undefined} />}
       </main>
     </div>
   )

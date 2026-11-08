@@ -50,6 +50,7 @@ function mock(kind: 'url' | 'message', input: string): ThreatReport {
     if (/(otp|password|kyc|pin)/.test(t)) f('Credential request detected', 'The message requests credentials or sensitive account information. Evidence: share OTP', 'high', 'M3', 'Sharing an OTP can give attackers access to your account.', 'Never share OTPs. Contact the organisation through its official app.')
     if (/prize|won/.test(t)) f('Reward or prize lure detected', 'The message contains a reward or prize lure. Evidence: you won a prize', 'medium', 'M3')
   }
+  if (kind === 'message') { const u = input.match(/https?:\/\/\S+|\b[\w-]+(?:\.[\w-]+)*\.[a-z]{2,}\/\S+/i); if (u) indicators.push({ indicator_type: 'url', value: u[0].replace(/[.,;)]+$/, ''), source_module: 'M3' }) }
   if (kind === 'url') { evidence.push({ description: `Redirect observed: ${input}`, source_module: 'M1', reference: input }, { description: 'Redirect observed: https://landing.example-cdn.net/r?x=1', source_module: 'M1', reference: 'https://landing.example-cdn.net/r?x=1' }, { description: 'Redirect observed: https://secure-verify.example.top/signin', source_module: 'M1', reference: 'https://secure-verify.example.top/signin' })
     indicators.push({ indicator_type: 'domain', value: 'secure-verify.example.top', source_module: 'M1' }, { indicator_type: 'ip', value: '203.0.113.24', source_module: 'M1' })
     if (findings.length) f('Untrusted certificate issuer', 'The certificate chain does not lead to a trusted root. URL: ' + input, 'medium', 'M2') }
