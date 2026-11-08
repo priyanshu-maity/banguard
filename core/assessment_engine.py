@@ -12,6 +12,7 @@ class AssessmentEvidence:
     indicators: list[ReportIndicator] = field(default_factory=list)
     evidence: list[ReportEvidence] = field(default_factory=list)
     module_statuses: dict[str, str] = field(default_factory=dict)
+    investigation_type: str = "url"
 
 
 def _unwrap(result):
@@ -119,7 +120,7 @@ def _collect_m2(output, results):
             _add_evidence(output, description, "M2", url)
 
 
-def _collect_m4(output, result):
+def _collect_m4(output, result, investigation_id):
     data = _unwrap(result)
     if data is None:
         return
@@ -127,27 +128,31 @@ def _collect_m4(output, result):
     grouped = {}
 
     for relationship in data.relationships:
+        historical_ids = {item for item in relationship.investigation_ids if item != investigation_id}
+
         for shared in relationship.shared_indicators:
             key = (shared.indicator_type.value, shared.value)
-
             if key not in grouped:
                 grouped[key] = {"investigations": set(), "sources": set()}
 
-            grouped[key]["investigations"].update(relationship.investigation_ids)
+            grouped[key]["investigations"].update(historical_ids)
             grouped[key]["sources"].update(source.module for source in shared.sources)
 
     for (indicator_type, value), details in grouped.items():
+        if not details["investigations"]:
+            continue
+
         investigations = ", ".join(sorted(details["investigations"]))
         sources = ", ".join(sorted(details["sources"]))
 
         description = (
-            f"Shared {indicator_type} indicator: {value}. "
-            f"Related investigations: {investigations}. "
-            f"Original indicator sources: {sources}."
+            f"Historical correlation: shared {indicator_type} indicator {value}. "
+            f"Previously observed in investigations: {investigations}. "
+            f"Original indicator sources: {sources}. "
+            "A shared indicator does not establish common ownership, coordination, or malicious activity."
         )
 
         _add_evidence(output, description, "M4")
-
 
 def _collect_m5(output, result):
     data = _unwrap(result)
@@ -165,29 +170,76 @@ def _collect_m5(output, result):
     if data.error:
         _add_evidence(output, f"Website security analysis error: {data.error}", "M5")
 
-def collect_assessment_evidence(investigation_id, original_url, m1_result=None, m2_results=None, m3_result=None, m4_result=None, m5_result=None):
-    """Collect module findings and reuse M4 for all indicator extraction."""
+def _deduplicate_indicators(indicators):
+    grouped = {}
 
-    output = AssessmentEvidence()
-    _record_status(output, "M1", m1_result)
-    _record_status(output, "M3", m3_result)
-    _record_status(output, "M4", m4_result)
-    _record_status(output, "M5", m5_result)
+    for indicator in indicators:
+        key = (indicator.indicator_type, indicator.value)
 
-    for url, result in (m2_results or {}).items():
-        _record_status(output, "M2", result, url)
+        if key not in grouped:
+            grouped[key] = []
 
-    _collect_m1(output, m1_result)
-    _collect_m2(output, m2_results)
-    _collect_m4(output, m4_result)
-    _collect_m5(output, m5_result)
+        if indicator.source_module not in grouped[key]:
+            grouped[key].append(indicator.source_module)
 
-    shared_indicators = extract_indicators(investigation_id=investigation_id, original_url=original_url, m1_result=m1_result, m2_result=None, m3_result=m3_result, m5_result=m5_result,)
+    return [
+        ReportIndicator(indicator_type=indicator_type, value=value, source_module=", ".join(sources))
+        for (indicator_type, value), sources in grouped.items()
+    ]
 
-    for shared in shared_indicators:
-        for source in shared.sources:
-            output.indicators.append(ReportIndicator(indicator_type=shared.indicator_type.value, value=shared.value, source_module=source.module,))
+def collect_assessment_evidence(investigation_id, original_url, m1_result=None, m2_results=None, m3_result=None, m4_result=None, m5_result=None, investigation_type="url"):
+    """Collect evidence according to the type of investigation."""
 
+    if investigation_type not in ("url", "message", "combined"):
+        raise ValueError("investigation_type must be 'url', 'message', or 'combined'.")
+
+    output = AssessmentEvidence(investigation_type=investigation_type)
+
+    if investigation_type == "url":
+        _record_status(output, "M1", m1_result)
+        output.module_statuses["M3"] = "not_applicable"
+        _record_status(output, "M4", m4_result)
+        _record_status(output, "M5", m5_result)
+
+        for url, result in (m2_results or {}).items():
+            _record_status(output, "M2", result, url)
+
+        _collect_m1(output, m1_result)
+        _collect_m2(output, m2_results)
+        _collect_m5(output, m5_result)
+
+    elif investigation_type == "message":
+        output.module_statuses["M1"] = "not_applicable"
+        _record_status(output, "M3", m3_result)
+        _record_status(output, "M4", m4_result)
+        output.module_statuses["M5"] = "not_applicable"
+
+        # M3-specific findings and indicators will be mapped once its schema is available.
+
+    else:
+        _record_status(output, "M1", m1_result)
+        _record_status(output, "M3", m3_result)
+        _record_status(output, "M4", m4_result)
+        _record_status(output, "M5", m5_result)
+
+        for url, result in (m2_results or {}).items():
+            _record_status(output, "M2", result, url)
+
+        _collect_m1(output, m1_result)
+        _collect_m2(output, m2_results)
+        _collect_m5(output, m5_result)
+
+    _collect_m4(output, m4_result, investigation_id)
+
+    # M4's existing extractor is reused for URL-based investigations.
+    if investigation_type in ("url", "combined"):
+        shared_indicators = extract_indicators(investigation_id=investigation_id, original_url=original_url, m1_result=m1_result, m2_result=None, m3_result=m3_result, m5_result=m5_result,)
+
+        for shared in shared_indicators:
+            for source in shared.sources:
+                output.indicators.append(ReportIndicator(indicator_type=shared.indicator_type.value, value=shared.value, source_module=source.module,))
+
+    output.indicators = _deduplicate_indicators(output.indicators)
     return output
 
 
@@ -238,21 +290,22 @@ def classify_risk(assessment: AssessmentEvidence) -> RiskLevel:
     if strong_count >= 1 or score >= 2.5:
         return RiskLevel.SUSPICIOUS
 
-    # Check whether enough analysis actually completed.
-    m1_status = assessment.module_statuses.get("M1", "not_provided")
-    m5_status = assessment.module_statuses.get("M5", "not_provided")
+    # Determine coverage according to the investigation type.
+    statuses = assessment.module_statuses
+    investigation_type = assessment.investigation_type
 
-    m2_statuses = [
-        status
-        for module, status in assessment.module_statuses.items()
-        if module.startswith("M2:")
-    ]
+    m2_statuses = [status for module, status in statuses.items() if module.startswith("M2:")]
 
-    coverage_complete = (
-        m1_status == "completed"
-        and m5_status == "completed"
-        and all(status in ("completed", "skipped") for status in m2_statuses)
-    )
+    url_coverage_complete = (statuses.get("M1") == "completed" and statuses.get("M5") == "completed" and all(status in ("completed", "skipped") for status in m2_statuses))
+
+    if investigation_type == "url":
+        coverage_complete = url_coverage_complete
+    elif investigation_type == "message":
+        coverage_complete = statuses.get("M3") == "completed"
+    elif investigation_type == "combined":
+        coverage_complete = (statuses.get("M3") == "completed" and url_coverage_complete)
+    else:
+        coverage_complete = False
 
     if not coverage_complete:
         return RiskLevel.INCONCLUSIVE
@@ -260,26 +313,41 @@ def classify_risk(assessment: AssessmentEvidence) -> RiskLevel:
     return RiskLevel.LOW
 
 
+
 def create_threat_report(investigation_id: str, assessment: AssessmentEvidence) -> ThreatReport:
     """Generate a unified threat report from collected assessment evidence."""
 
     risk_level = classify_risk(assessment)
+    finding_count = len(assessment.findings)
+    indicator_count = len(assessment.indicators)
 
     summaries = {
-        RiskLevel.LOW: "No significant suspicious activity was identified in the completed analysis.",
+        RiskLevel.LOW: "The completed analysis identified no significant suspicious activity.",
         RiskLevel.SUSPICIOUS: "Suspicious indicators were identified. Further investigation is recommended.",
-        RiskLevel.HIGH: "Multiple strong indicators of malicious activity were identified.",
+        RiskLevel.HIGH: "Multiple strong indicators of potentially malicious activity were identified.",
         RiskLevel.CONFIRMED_MALICIOUS: "Authoritative threat intelligence confirmed malicious activity.",
         RiskLevel.INCONCLUSIVE: "Available analysis was insufficient to reach a reliable security assessment.",
     }
 
     summary = summaries[risk_level]
 
-    incomplete = [
-        f"{module}: {status}"
-        for module, status in assessment.module_statuses.items()
-        if status in ("partial", "failed")
-    ]
+    if finding_count:
+        summary += f" The analysis recorded {finding_count} finding{'s' if finding_count != 1 else ''}."
+
+        severity_counts = {}
+        for finding in assessment.findings:
+            severity = str(finding.severity).lower()
+            severity_counts[severity] = severity_counts.get(severity, 0) + 1
+
+        severity_summary = ", ".join(f"{count} {severity}" for severity, count in sorted(severity_counts.items()))
+        summary += f" Severity breakdown: {severity_summary}."
+    else:
+        summary += " No findings were recorded."
+
+    if indicator_count:
+        summary += f" {indicator_count} unique threat indicator{'s' if indicator_count != 1 else ''} were recorded."
+
+    incomplete = [f"{module}: {status}" for module, status in assessment.module_statuses.items() if status in ("partial", "failed")]
 
     if incomplete:
         summary += " Incomplete analyses: " + ", ".join(incomplete) + "."

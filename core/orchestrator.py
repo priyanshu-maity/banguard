@@ -2,7 +2,8 @@ from dataclasses import dataclass, field
 from uuid import uuid4
 from urllib.parse import urlsplit
 
-from core.schema import AnalysisResult, AnalysisStatus
+from core.schema import AnalysisResult, AnalysisStatus, ThreatReport
+from core.assessment_engine import collect_assessment_evidence, create_threat_report, submit_and_verify_report
 from engines.url_analyzer.url_analyzer import URLAnalyzer
 from engines.tls_analyzer.tls_analyzer import TLSAnalyzer
 from engines.website_security import analyze_website_security
@@ -17,6 +18,11 @@ class InvestigationResult:
     m2_results: dict[str, AnalysisResult] = field(default_factory=dict)
     m4_result: AnalysisResult | None = None
     m5_result: AnalysisResult | None = None
+    threat_report: ThreatReport | None = None
+    report_submission: dict | None = None
+    report_verification: dict | None = None
+    report_submission_error: str | None = None
+
 
 def _collect_urls(original_url: str, m1_data, normalized_url: str | None) -> list[str]:
     urls = []
@@ -40,9 +46,11 @@ def _collect_urls(original_url: str, m1_data, normalized_url: str | None) -> lis
 
     return urls
 
+
 def _run_tls_analysis(url: str, investigation_id: str) -> AnalysisResult:
     try:
         parsed = urlsplit(url)
+
         if parsed.scheme.lower() != "https":
             return AnalysisResult(investigation_id=investigation_id, module="M2", status=AnalysisStatus.SKIPPED, error="TLS analysis is not applicable to HTTP URLs.")
 
@@ -51,11 +59,14 @@ def _run_tls_analysis(url: str, investigation_id: str) -> AnalysisResult:
 
         if not host:
             raise ValueError("URL does not contain a valid hostname.")
+
         tls_data = TLSAnalyzer(host, port).analyze()
 
         return AnalysisResult(investigation_id=investigation_id, module="M2", status=AnalysisStatus.COMPLETED, data=tls_data)
+
     except Exception as error:
         return AnalysisResult(investigation_id=investigation_id, module="M2", status=AnalysisStatus.FAILED, error=str(error))
+
 
 def run_investigation(url: str, investigation_id: str | None = None) -> InvestigationResult:
     if not url or not url.strip():
@@ -81,6 +92,7 @@ def run_investigation(url: str, investigation_id: str | None = None) -> Investig
 
     # M2: TLS analysis for the original URL and every redirect
     urls = _collect_urls(url, m1_data, normalized_url)
+
     for target_url in urls:
         investigation.m2_results[target_url] = _run_tls_analysis(target_url, investigation_id)
 
@@ -92,16 +104,20 @@ def run_investigation(url: str, investigation_id: str | None = None) -> Investig
 
     # M4: Threat correlation
     try:
-        investigation.m4_result = correlate_investigation(
-            investigation_id=investigation_id,
-            original_url=analysis_url,
-            m1_result=investigation.m1_result,
-            m2_result=None,
-            m3_result=None,
-            m5_result=investigation.m5_result
-        )
+        investigation.m4_result = correlate_investigation(investigation_id=investigation_id, original_url=analysis_url, m1_result=investigation.m1_result, m2_result=None, m3_result=None, m5_result=investigation.m5_result)
     except Exception as error:
         investigation.m4_result = AnalysisResult(investigation_id=investigation_id, module="M4", status=AnalysisStatus.FAILED, error=str(error))
 
-    return investigation
+    # Assessment: Collect evidence and generate the unified threat report
+    assessment = collect_assessment_evidence(investigation_id=investigation_id, original_url=analysis_url, m1_result=investigation.m1_result, m2_results=investigation.m2_results, m3_result=None, m4_result=investigation.m4_result, m5_result=investigation.m5_result, investigation_type="url")
+    investigation.threat_report = create_threat_report(investigation_id, assessment)
 
+    # M6: Submit and verify the report without losing the local report if submission fails
+    try:
+        m6_result = submit_and_verify_report(investigation.threat_report)
+        investigation.report_submission = m6_result["submission"]
+        investigation.report_verification = m6_result["verification"]
+    except Exception as error:
+        investigation.report_submission_error = str(error)
+
+    return investigation
