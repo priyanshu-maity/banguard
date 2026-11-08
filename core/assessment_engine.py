@@ -115,3 +115,39 @@ def _collect_m2(output, results):
 
             _add_finding(output, title, description, severity, "M2")
             _add_evidence(output, description, "M2", url)
+
+def _collect_m4(output, result):
+    data = _unwrap(result)
+    if data is None:
+        return
+
+    for relationship in data.relationships:
+        investigation_ids = ", ".join(relationship.investigation_ids)
+
+        for shared in relationship.shared_indicators:
+            indicator_sources = ", ".join(source.module for source in shared.sources)
+            description = (
+                f"Shared {shared.indicator_type.value} indicator: {shared.value}. "
+                f"Related investigations: {investigation_ids}. "
+                f"Original indicator sources: {indicator_sources}."
+            )
+            _add_evidence(output, description, "M4")
+
+def _collect_m5(output, result):
+    data = _unwrap(result)
+    if data is None:
+        return
+
+    for finding in data.findings:
+        severity = getattr(finding.severity, "value", str(finding.severity))
+        _add_finding(output, finding.title, finding.evidence, severity, "M5", finding.impact, finding.remediation)
+        _add_evidence(output, finding.evidence, "M5", data.final_url)
+
+    for limitation in data.limitations:
+        _add_evidence(output, f"Analysis limitation: {limitation}", "M5")
+
+    if data.error:
+        _add_evidence(output, f"Website security analysis error: {data.error}", "M5")
+
+
+
