@@ -56,6 +56,9 @@ class URLAnalyzer:
         self.public_suffix = inspector.public_suffix
 
     def _check_dns(self):
+        if self.registered_domain is None:
+            return
+
         analyzer = DNSAnalyzer(self.registered_domain, self.result)
         analyzer.analyze()
 
