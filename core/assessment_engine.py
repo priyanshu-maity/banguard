@@ -78,3 +78,40 @@ def _collect_m1(output, result):
     if data.redirect_chain[0]:
         for redirect in data.redirect_chain[1]:
             _add_evidence(output, f"Redirect observed: {redirect}", "M1", redirect)
+
+def _collect_m2(output, results):
+    for url, result in (results or {}).items():
+        data = _unwrap(result)
+        _record_status(output, "M2", result, url)
+
+        if data is None:
+            if result is not None and result.error:
+                _add_evidence(output, f"TLS analysis error: {result.error}", "M2", url)
+            continue
+
+        checks = [
+            ("verification_failed", "Certificate verification failed", "high", "Certificate-chain verification failed."),
+            ("certificate_expired", "Expired TLS certificate", "high", "The retrieved leaf certificate has expired."),
+            ("certificate_not_yet_valid", "TLS certificate not yet valid", "high", "The retrieved leaf certificate is not yet valid."),
+            ("hostname_mismatch", "TLS hostname mismatch", "high", "The certificate does not match the requested hostname."),
+            ("self_signed", "Self-signed TLS certificate", "high", "The retrieved certificate is self-signed."),
+            ("unknown_issuer", "Untrusted certificate issuer", "medium", "The certificate chain does not lead to a trusted root."),
+            ("distrusted_ca_match", "Distrusted certificate authority match", "high", "The certificate matches a locally distrusted CA entry."),
+        ]
+
+        https_available = data.https_available
+
+        if https_available[0] is False:
+            _add_evidence(output, f"TLS handshake was unavailable: {https_available[1]}", "M2", url)
+
+        for field_name, title, severity, description in checks:
+            value = getattr(data, field_name, None)
+            if not isinstance(value, tuple) or not value or value[0] is not True:
+                continue
+
+            details = value[1] if len(value) > 1 else None
+            description = f"{description} Details: {details}" if details else description
+            description = f"{description} URL: {url}"
+
+            _add_finding(output, title, description, severity, "M2")
+            _add_evidence(output, description, "M2", url)
