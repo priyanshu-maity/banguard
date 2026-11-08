@@ -13,10 +13,10 @@ class AnalysisStatus(str, Enum):
 
 class RiskLevel(str, Enum):
     LOW = "low"
-    MEDIUM = "medium"
+    SUSPICIOUS = "suspicious"
     HIGH = "high"
-    CRITICAL = "critical"
-    UNKNOWN = "unknown"
+    CONFIRMED_MALICIOUS = "confirmed_malicious"
+    INCONCLUSIVE = "inconclusive"
 
 
 T = TypeVar("T")
