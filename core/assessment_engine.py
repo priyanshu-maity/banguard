@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from uuid import uuid4
 
-from core.schema import RiskLevel, ReportFinding, ReportIndicator, ReportEvidence
+from core.schema import RiskLevel, ReportFinding, ReportIndicator, ReportEvidence, ThreatReport
 from engines.threat_correlation.indicator_extractor import extract_indicators
 
 
@@ -242,3 +244,30 @@ def classify_risk(assessment: AssessmentEvidence) -> RiskLevel:
         return RiskLevel.INCONCLUSIVE
 
     return RiskLevel.LOW
+
+
+def create_threat_report(investigation_id: str, assessment: AssessmentEvidence) -> ThreatReport:
+    """Generate a unified threat report from collected assessment evidence."""
+
+    risk_level = classify_risk(assessment)
+
+    summaries = {
+        RiskLevel.LOW: "No significant suspicious activity was identified in the completed analysis.",
+        RiskLevel.SUSPICIOUS: "Suspicious indicators were identified. Further investigation is recommended.",
+        RiskLevel.HIGH: "Multiple strong indicators of malicious activity were identified.",
+        RiskLevel.CONFIRMED_MALICIOUS: "Authoritative threat intelligence confirmed malicious activity.",
+        RiskLevel.INCONCLUSIVE: "Available analysis was insufficient to reach a reliable security assessment.",
+    }
+
+    summary = summaries[risk_level]
+
+    incomplete = [
+        f"{module}: {status}"
+        for module, status in assessment.module_statuses.items()
+        if status in ("partial", "failed")
+    ]
+
+    if incomplete:
+        summary += " Incomplete analyses: " + ", ".join(incomplete) + "."
+
+    return ThreatReport(report_id=str(uuid4()), investigation_id=investigation_id, created_at=datetime.now(timezone.utc).isoformat(), risk_level=risk_level, summary=summary, findings=list(assessment.findings), indicators=list(assessment.indicators), evidence=list(assessment.evidence),)
