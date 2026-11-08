@@ -1,10 +1,9 @@
-from urllib.parse import urlparse, urlunparse, unquote
-import ipaddress
-import idna
+from urllib.parse import urlparse
 
 from analysis_result import URLAnalysisResult
 from url_normalizer import URLNormalizer
 from domain_inspector import DomainInspector
+from dns_analyzer import DNSAnalyzer
 
 
 class URLAnalyzer:
@@ -58,7 +57,8 @@ class URLAnalyzer:
         self.public_suffix = inspector.public_suffix
 
     def _check_dns(self):
-        ...
+        analyzer = DNSAnalyzer(self.registered_domain, self.result)
+        analyzer.analyze()
 
     def _inspect_redirects(self):
         ...
