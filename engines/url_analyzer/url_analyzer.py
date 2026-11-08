@@ -10,9 +10,8 @@ import dns.exception
 from rapidfuzz import fuzz
 from confusable_homoglyphs import confusables
 
-from constants.known_brands import KNOWN_BRANDS
-from constants.suspicious_keywords import SUSPICIOUS_KEYWORDS
 from analysis_result import URLAnalysisResult
+from domain_inspector import DomainInspector
 
 
 class URLAnalyzer:
@@ -20,13 +19,17 @@ class URLAnalyzer:
         suffix_list_urls=()
     )
 
-    normalized_url: str = None
-    scheme: str = None
-    domain: str = None
-
     def __init__(self, url: str, threat_intel_lookup=None):
         self.url = url
         self.threat_intel_lookup = threat_intel_lookup
+
+        self.normalized_url = None
+        self.scheme = None
+        self.domain = None
+
+        self.subdomain = None
+        self.registered_domain = None
+        self.public_suffix = None
 
         self.result = URLAnalysisResult()
 
@@ -125,203 +128,23 @@ class URLAnalyzer:
         self.scheme = parsed.scheme.lower()
 
     def _inspect_domain(self):
-        domain = self.result.domain
-        registered_domain = self.result.registered_domain
+        parsed = urlparse(self.normalized_url)
+        self.path = parsed.path or '/'
 
-        # Use the registrable domain when available
-        analysis_domain = registered_domain or domain
+        if self.result.uses_ip_address[0]:
+            return
 
-        domain_label = analysis_domain.split('.')[0]
-
-        # 1. Structural characteristics
-        self.result.domain_length = len(domain)
-        self.result.subdomain_count = (
-            len(self.result.subdomain.split('.'))
-            if self.result.subdomain else 0
+        inspector = DomainInspector(
+            domain=self.domain,
+            path=self.path,
+            result=self.result
         )
 
-        self.result.hyphen_count = domain.count('-')
+        self.result = inspector.inspect()
 
-        self.result.digit_count = sum(
-            char.isdigit() for char in domain
-        )
-
-        self.result.unusually_long_domain = (
-                self.result.domain_length > 50
-        )
-
-        self.result.excessive_hyphens = (
-                self.result.hyphen_count >= 3
-        )
-
-        self.result.high_digit_count = (
-                self.result.digit_count >= 5
-        )
-
-        # 2. IP address detection
-        try:
-            ipaddress.ip_address(domain)
-            self.result.uses_ip_address = True
-
-        except ValueError:
-            self.result.uses_ip_address = False
-
-        # 3. Unicode and Punycode inspection
-        self.result.uses_punycode = 'xn--' in domain.lower()
-
-        try:
-            unicode_domain = domain.encode(
-                'ascii'
-            ).decode('idna')
-
-        except UnicodeError:
-            unicode_domain = domain
-
-        self.result.unicode_domain = unicode_domain
-
-        scripts = set()
-
-        for char in unicode_domain:
-
-            if not char.isalpha():
-                continue
-
-            unicode_name = unicodedata.name(char, '')
-
-            for script in (
-                    'LATIN',
-                    'CYRILLIC',
-                    'GREEK',
-                    'HEBREW',
-                    'ARABIC',
-                    'HIRAGANA',
-                    'KATAKANA',
-                    'CJK',
-                    'HANGUL'
-            ):
-
-                if script in unicode_name:
-                    scripts.add(script)
-                    break
-
-        self.result.unicode_scripts = sorted(scripts)
-
-        self.result.mixed_unicode_scripts = len(scripts) > 1
-
-        self.result.confusable_characters_detected = (
-            confusables.is_dangerous(
-                unicode_domain,
-                preferred_aliases=['latin']
-            )
-        )
-
-        # 4. Typosquatting detection
-        for brand in self.KNOWN_BRANDS:
-
-            similarity = fuzz.ratio(
-                domain_label,
-                brand
-            )
-
-            if similarity >= 80 and domain_label != brand:
-                self.result.typosquatting_detected = True
-
-                self.result.typosquatting_brands.append(
-                    brand
-                )
-
-            # Generated variant comparison
-            variants = self._generate_domain_variants(brand)
-
-            if domain_label in variants and domain_label != brand:
-
-                self.result.generated_variant_match = True
-                self.result.typosquatting_detected = True
-
-                if brand not in self.result.typosquatting_brands:
-                    self.result.typosquatting_brands.append(brand)
-
-        # 5. Brand placement detection
-        subdomain = self.result.subdomain or ''
-
-        for brand in self.KNOWN_BRANDS:
-
-            if brand in subdomain.split('.'):
-                self.result.brand_in_subdomain = True
-                self.result.brands_in_subdomain.append(brand)
-
-            if brand in (self.result.decoded_path or '').lower():
-                self.result.brand_in_path = True
-                self.result.brands_in_path.append(brand)
-
-        # 6. Suspicious keyword detection
-        searchable_text = ' '.join([
-            subdomain,
-            domain,
-            self.result.decoded_path or ''
-        ]).lower()
-
-        self.result.suspicious_keywords = [
-            keyword
-            for keyword in self.SUSPICIOUS_KEYWORDS
-            if keyword in searchable_text
-        ]
-
-        # 7. High-risk TLD detection
-        self.result.high_risk_tld = (
-                self.result.public_suffix in self.HIGH_RISK_TLDS
-        )
-
-        # 8. Unusual port detection
-        self.result.unusual_port = (
-                self.result.port is not None
-        )
-
-        # 9. Shannon entropy
-        self.result.domain_entropy = self._calculate_entropy(
-            domain_label
-        )
-
-        self.result.high_domain_entropy = (
-                self.result.domain_entropy >= 3.5
-                and len(domain_label) >= 12
-        )
-
-    def _generate_domain_variants(self, brand: str) -> set[str]:
-        variants = set()
-
-        # Character omissions
-        for i in range(len(brand)):
-            variants.add(brand[:i] + brand[i + 1:])
-
-        # Adjacent character transpositions
-        for i in range(len(brand) - 1):
-
-            variant = list(brand)
-
-            variant[i], variant[i + 1] = (
-                variant[i + 1],
-                variant[i]
-            )
-
-            variants.add(''.join(variant))
-
-        # Repeated characters
-        for i in range(len(brand)):
-            variants.add(
-                brand[:i] + brand[i] + brand[i:]
-            )
-
-        # Keyboard adjacent substitutions
-        for i, char in enumerate(brand):
-
-            for adjacent in self.KEYBOARD_ADJACENCY.get(char, ''):
-
-                variants.add(
-                    brand[:i] + adjacent + brand[i + 1:]
-                )
-
-        return variants
+        self.subdomain = inspector.subdomain
+        self.registered_domain = inspector.registered_domain
+        self.public_suffix = inspector.public_suffix
 
     def _check_dns(self):
         domain = self.result.domain
@@ -501,18 +324,3 @@ class URLAnalyzer:
         self.result.threat_intelligence_match = bool(
             self.result.threat_matches
         )
-
-    @staticmethod
-    def _calculate_entropy(value: str) -> float:
-        if not value:
-            return 0.0
-
-        entropy = 0.0
-
-        for char in set(value):
-
-            probability = value.count(char) / len(value)
-
-            entropy -= probability * math.log2(probability)
-
-        return round(entropy, 4)
