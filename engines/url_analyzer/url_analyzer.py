@@ -49,7 +49,7 @@ class URLAnalyzer:
             result=self.result
         )
 
-        self.result = inspector.inspect()
+        inspector.inspect()
 
         self.subdomain = inspector.subdomain
         self.registered_domain = inspector.registered_domain

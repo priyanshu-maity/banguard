@@ -22,7 +22,7 @@ class DomainInspector:
         self.registered_domain = None
         self.public_suffix = None
 
-    def inspect(self) -> URLAnalysisResult:
+    def inspect(self):
         self._extract_domain_metadata()
         self._check_typosquatting()
         self._check_punycode()
@@ -30,8 +30,6 @@ class DomainInspector:
         self._check_brand_in_subdomain()
         self._check_suspicious_keywords()
         self._check_domain_structure()
-
-        return self.result
 
     def _extract_domain_metadata(self):
         extracted = self.TLD_EXTRACTOR(self.domain)
