@@ -11,6 +11,9 @@ import dns.exception
 from rapidfuzz import fuzz
 from confusable_homoglyphs import confusables
 
+from constants.known_brands import KNOWN_BRANDS
+from constants.suspicious_keywords import SUSPICIOUS_KEYWORDS
+
 
 @dataclass
 class URLAnalysisResult:
@@ -48,8 +51,6 @@ class URLAnalyzer:
     normalized_url: str = None
     scheme: str = None
     domain: str = None
-    has_user_info: bool = False
-    uses_ip_address: bool = False
 
     def __init__(self, url: str, threat_intel_lookup=None):
         self.url = url
@@ -87,9 +88,15 @@ class URLAnalyzer:
             raise ValueError('URL must contain a hostname')
 
         # Detect embedded credentials
-        self.has_userinfo = (
-                parsed.username is not None or
-                parsed.password is not None
+        self.result.has_userinfo = (
+            self.result.has_userinfo[0] or parsed.username is not None or parsed.password is not None,
+            [
+                item for item, present in (
+                ('username', parsed.username is not None),
+                ('password', parsed.password is not None)
+            )
+                if present
+            ]
         )
 
         hostname = parsed.hostname.rstrip('.').lower()
@@ -99,12 +106,12 @@ class URLAnalyzer:
             ip = ipaddress.ip_address(hostname)
 
             ascii_hostname = str(ip)
-            self.uses_ip_address = True
+            self.result.uses_ip_address = (True, ascii_hostname)
 
         except ValueError:
             try:
                 ascii_hostname = idna.encode(hostname).decode('ascii')
-                self.uses_ip_address = False
+                self.result.uses_ip_address = (False, None)
 
             except idna.IDNAError:
                 raise ValueError('Invalid internationalised domain name')
@@ -139,7 +146,7 @@ class URLAnalyzer:
         ))
 
         self.normalized_url = normalized_url
-        self.domain = hostname if self.uses_ip_address else (
+        self.domain = hostname if self.result.uses_ip_address[0] else (
             idna.encode(hostname).decode('ascii')
         )
 
