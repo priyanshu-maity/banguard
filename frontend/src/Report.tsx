@@ -52,6 +52,14 @@ function Ledger({ r }: { r: ThreatReport }) {
 type Mark = { needle: string; title: string; reason: string; sev: string; kind: 'phrase' | 'indicator' }
 const rank = (s: string) => SEV.length - SEV.indexOf(s)
 
+// tooltips are position:fixed so the scrollable message box cannot clip them
+const place = (e: React.SyntheticEvent<HTMLElement>) => {
+  const el = e.currentTarget, tip = el.querySelector<HTMLElement>('.tip'); if (!tip) return
+  const r = el.getBoundingClientRect(), h = tip.offsetHeight, w = tip.offsetWidth
+  tip.style.left = Math.max(8, Math.min(r.left, innerWidth - w - 8)) + 'px'
+  tip.style.top = (r.bottom + 8 + h > innerHeight ? Math.max(8, r.top - h - 8) : r.bottom + 8) + 'px'
+}
+
 function Highlighter({ text, findings, indicators }: { text: string; findings: ThreatReport['findings']; indicators: ThreatReport['indicators'] }) {
   const marks: Mark[] = []
   findings.filter(f => f.source_module === 'M3').forEach(f => {
@@ -79,7 +87,7 @@ function Highlighter({ text, findings, indicators }: { text: string; findings: T
   keep.forEach((r, k) => {
     if (r.s > pos) parts.push(text.slice(pos, r.s))
     parts.push(
-      <mark key={k} tabIndex={0} className={'hl ' + (r.m.kind === 'indicator' ? 'h-ind' : 'h-' + r.m.sev)}>
+      <mark key={k} tabIndex={0} onMouseEnter={place} onFocus={place} className={'hl ' + (r.m.kind === 'indicator' ? 'h-ind' : 'h-' + r.m.sev)}>
         {text.slice(r.s, r.e)}<span role="tooltip" className="tip"><b>{r.m.title}</b>{r.m.reason}</span>
       </mark>)
     pos = r.e
