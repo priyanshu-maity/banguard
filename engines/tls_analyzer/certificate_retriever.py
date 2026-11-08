@@ -1,126 +1,90 @@
-from urllib.parse import urlsplit
 import socket
 import ssl
 
 from cryptography import x509
 
+from .analysis_result import TLSAnalysisResult
+from .ssrf_guard import UnsafeAddressError, resolve_public_ip
+
+# OpenSSL X509_V_ERR_* codes -> plain reasons
+_VERIFY_CODE_REASONS = {
+    9: "not_yet_valid",
+    10: "expired",
+    18: "self_signed",
+    19: "unknown_issuer",
+    20: "unknown_issuer",
+    21: "unknown_issuer",
+    62: "hostname_mismatch",
+    64: "hostname_mismatch",
+}
+
 
 class CertificateRetriever:
-    TIMEOUT = 5
-
-    def __init__(self, hostname: str, port: int, destination_validator):
-        self.hostname = hostname
+    def __init__(self, host: str, port: int, result: TLSAnalysisResult, timeout: float = 5.0):
+        self.host = host
         self.port = port
-        self.destination_validator = destination_validator
+        self.result = result
+        self.timeout = timeout
 
-        # Retrieved information
-        self.certificate = None
-        self.der_certificate = None
-
-        # Connection information
-        self.https_available = None
-        self.verification_failed = None
-        self.verification_reason = None
-        self.connection_error = None
-
-    def retrieve(self):
-        # Validate destination before establishing a connection.
-        safe_ips = self.destination_validator(
-            self.hostname,
-            self.port
-        )
-
-        verified_context = ssl.create_default_context()
-
+    def retrieve(self) -> x509.Certificate | None:
         try:
-            self.der_certificate = self._connect(
-                safe_ips,
-                verified_context
-            )
+            ip = resolve_public_ip(self.host, self.port)
+        except UnsafeAddressError as exc:
+            self.result.https_available = (None, f"blocked_by_ssrf_guard: {exc}")
+            return None
+        except OSError as exc:
+            self.result.https_available = (None, f"dns_resolution_failed: {exc}")
+            return None
 
-            self.https_available = True
-            self.verification_failed = False
-
+        # verified handshake
+        try:
+            der = self._handshake(ip, verify=True)
+            self.result.https_available = (True, None)
+            self.result.verification_failed = (False, None)
+            return x509.load_der_x509_certificate(der)
         except ssl.SSLCertVerificationError as exc:
-            self.verification_failed = True
-            self.verification_reason = self._map_verification_error(exc)
-
-            # Retry only to retrieve the certificate.
-            unverified_context = ssl.create_default_context()
-            unverified_context.check_hostname = False
-            unverified_context.verify_mode = ssl.CERT_NONE
-
-            try:
-                self.der_certificate = self._connect(
-                    safe_ips,
-                    unverified_context
-                )
-
-                self.https_available = True
-
-            except (OSError, ssl.SSLError) as retry_exc:
-                self.https_available = False
-                self.connection_error = str(retry_exc)
-
+            self.result.verification_failed = (True, self._map_reason(exc))
         except (OSError, ssl.SSLError) as exc:
-            self.https_available = False
-            self.verification_failed = False
-            self.connection_error = str(exc)
+            self.result.https_available = (False, self._describe(exc))
+            return None
 
-        if self.der_certificate:
-            self.certificate = x509.load_der_x509_certificate(
-                self.der_certificate
-            )
+        # unverified handshake, only to read the certificate as evidence
+        try:
+            der = self._handshake(ip, verify=False)
+        except (OSError, ssl.SSLError) as exc:
+            self.result.https_available = (False, self._describe(exc))
+            return None
+        self.result.https_available = (True, None)
+        return x509.load_der_x509_certificate(der)
 
-        return self
+    def _handshake(self, ip: str, verify: bool) -> bytes:
+        if verify:
+            context = ssl.create_default_context()
+        else:
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
 
-    def _connect(self, safe_ips, context) -> bytes:
-        last_error = None
-
-        for ip in safe_ips:
-            try:
-                with socket.create_connection(
-                    (ip, self.port),
-                    timeout=self.TIMEOUT
-                ) as raw_socket:
-
-                    with context.wrap_socket(
-                        raw_socket,
-                        server_hostname=self.hostname
-                    ) as tls_socket:
-
-                        return tls_socket.getpeercert(
-                            binary_form=True
-                        )
-
-            except ssl.SSLCertVerificationError:
-                raise
-
-            except (OSError, ssl.SSLError) as exc:
-                last_error = exc
-
-        if last_error:
-            raise last_error
-
-        raise OSError('No validated IP addresses available')
+        with socket.create_connection((ip, self.port), timeout=self.timeout) as sock:
+            with context.wrap_socket(sock, server_hostname=self.host) as tls:
+                der = tls.getpeercert(binary_form=True)
+                if der is None:
+                    raise ssl.SSLError("server presented no certificate")
+                return der
 
     @staticmethod
-    def _map_verification_error(exc):
-        message = exc.verify_message.lower()
+    def _map_reason(exc: ssl.SSLCertVerificationError) -> str:
+        reason = _VERIFY_CODE_REASONS.get(exc.verify_code)
+        if reason:
+            return reason
+        return f"other: {exc.verify_message}"
 
-        if 'expired' in message:
-            return 'expired'
-
-        if 'not yet valid' in message:
-            return 'not_yet_valid'
-
-        if 'hostname' in message or 'ip address mismatch' in message:
-            return 'hostname_mismatch'
-
-        if 'self-signed' in message:
-            return 'self_signed'
-
-        if 'issuer' in message or 'unable to get' in message:
-            return 'unknown_issuer'
-
-        return 'unknown'
+    @staticmethod
+    def _describe(exc: Exception) -> str:
+        if isinstance(exc, TimeoutError):
+            return "timeout"
+        if isinstance(exc, ConnectionRefusedError):
+            return "connection_refused"
+        if isinstance(exc, ssl.SSLError):
+            return f"tls_handshake_failed: {exc.reason or exc}"
+        return f"{type(exc).__name__}: {exc}"
