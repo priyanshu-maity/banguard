@@ -1,0 +1,22 @@
+import ipaddress
+from urllib.parse import urlparse
+
+from engines.url_analyzer.analysis_result import URLAnalysisResult
+from engines.url_analyzer.url_normalizer import URLNormalizer
+
+from .schema import (
+    IndicatorType,
+    IndicatorSource,
+    SharedIndicator,
+)
+
+
+def _unwrap_result(result):
+    """Get module data from an AnalysisResult wrapper, if present."""
+    if result is None:
+        return None
+
+    if hasattr(result, "data"):
+        return result.data
+
+    return result
