@@ -148,7 +148,10 @@ class DomainInspector:
         )
 
     def _check_domain_structure(self):
-        hyphen_count = self.domain.count('-')
+        hyphen_count = sum(
+            label.count('-') - (2 if label.startswith('xn--') else 0)
+            for label in self.domain.split('.')
+        )
 
         subdomain_count = (
             len(self.subdomain.split('.'))
