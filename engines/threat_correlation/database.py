@@ -66,7 +66,7 @@ def find_matching_investigations(indicators: list[SharedIndicator], exclude_inve
                 WHERE indicator_type = ?
                 AND value = ?
             """
-            parameters = [ indicator.indicator_type.value, indicator.value,]
+            parameters = [indicator.indicator_type.value, indicator.value,]
 
             if exclude_investigation_id is not None:
                 query += " AND investigation_id != ?"
