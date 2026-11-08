@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from urllib.parse import urlparse, urlunparse, unquote
 import ipaddress
-import socket
+import idna
 import httpx
 import tldextract
 import math
@@ -107,75 +107,15 @@ class URLAnalysisResult:
 
 
 class URLAnalyzer:
-    KNOWN_BRANDS = [
-        'google',
-        'microsoft',
-        'amazon',
-        'paypal',
-        'facebook',
-        'apple'
-    ]
-
-    SUSPICIOUS_KEYWORDS = {
-        'login',
-        'signin',
-        'verify',
-        'verification',
-        'secure',
-        'update',
-        'account',
-        'password',
-        'wallet',
-        'confirm',
-        'authentication'
-    }
-
-    HIGH_RISK_TLDS = {
-        'zip',
-        'mov',
-        'top',
-        'xyz',
-        'click',
-        'work',
-        'country',
-        'gq',
-        'tk',
-        'ml',
-        'cf'
-    }
-
-    KEYBOARD_ADJACENCY = {
-        'a': 'qwsz',
-        'b': 'vghn',
-        'c': 'xdfv',
-        'd': 'serfcx',
-        'e': 'wsdr',
-        'f': 'drtgvc',
-        'g': 'ftyhbv',
-        'h': 'gyujnb',
-        'i': 'ujko',
-        'j': 'huikmn',
-        'k': 'jiolm',
-        'l': 'kop',
-        'm': 'njk',
-        'n': 'bhjm',
-        'o': 'iklp',
-        'p': 'ol',
-        'q': 'wa',
-        'r': 'edft',
-        's': 'awedxz',
-        't': 'rfgy',
-        'u': 'yhji',
-        'v': 'cfgb',
-        'w': 'qase',
-        'x': 'zsdc',
-        'y': 'tghu',
-        'z': 'asx'
-    }
-
     TLD_EXTRACTOR = tldextract.TLDExtract(
         suffix_list_urls=()
     )
+
+    normalized_url: str = None
+    scheme: str = None
+    domain: str = None
+    has_user_info: bool = False
+    uses_ip_address: bool = False
 
     def __init__(self, url: str, threat_intel_lookup=None):
         self.url = url
@@ -203,65 +143,61 @@ class URLAnalyzer:
             raise ValueError('URL contains invalid whitespace or control characters')
 
         if '://' not in url:
-            raise ValueError('URL must include an explicit scheme')
+            raise ValueError('URL must include a scheme (http:// or https://)')
 
         parsed = urlparse(url)
-        scheme = parsed.scheme.lower()
 
-        if scheme not in ('http', 'https'):
+        if parsed.scheme.lower() not in ('http', 'https'):
             raise ValueError('Only HTTP and HTTPS URLs are supported')
 
         if not parsed.hostname:
             raise ValueError('URL must contain a hostname')
 
-        # Identify embedded credentials
-        self.result.has_userinfo = (
-            parsed.username is not None or
-            parsed.password is not None
+        # Detect embedded credentials
+        self.has_userinfo = (
+                parsed.username is not None or
+                parsed.password is not None
         )
-
-        try:
-            port = parsed.port
-
-        except ValueError:
-            raise ValueError('Invalid URL port')
 
         hostname = parsed.hostname.rstrip('.').lower()
 
-        # Convert internationalised domain names to ASCII
+        # Detect IP address hosts and convert IDNs to Punycode
         try:
             ip = ipaddress.ip_address(hostname)
+
             ascii_hostname = str(ip)
+            self.uses_ip_address = True
 
         except ValueError:
-
             try:
-                ascii_hostname = hostname.encode(
-                    'idna'
-                ).decode('ascii')
+                ascii_hostname = idna.encode(hostname).decode('ascii')
+                self.uses_ip_address = False
 
-            except UnicodeError:
+            except idna.IDNAError:
                 raise ValueError('Invalid internationalised domain name')
 
-        # Preserve IPv6 formatting
+        # Preserve IPv6 brackets
         if ':' in ascii_hostname:
             ascii_hostname = f'[{ascii_hostname}]'
 
-        # Remove default ports
-        if port == 80 and scheme == 'http':
-            port = None
+        # Preserve an explicitly supplied port without analysing it
+        authority = parsed.netloc.rsplit('@', 1)[-1]
 
-        elif port == 443 and scheme == 'https':
-            port = None
+        if authority.startswith('['):
+            closing_bracket = authority.find(']')
+            port_suffix = authority[closing_bracket + 1:]
 
-        # Reconstruct netloc without userinfo
-        netloc = ascii_hostname
+        elif authority.count(':') == 1:
+            port_suffix = authority[authority.rfind(':'):]
 
-        if port is not None:
-            netloc += f':{port}'
+        else:
+            port_suffix = ''
 
+        netloc = ascii_hostname + port_suffix
+
+        # Reconstruct normalized URL without embedded credentials
         normalized_url = urlunparse((
-            scheme,
+            parsed.scheme.lower(),
             netloc,
             parsed.path or '/',
             parsed.params,
@@ -269,13 +205,12 @@ class URLAnalyzer:
             parsed.fragment
         ))
 
-        self.result.normalized_url = normalized_url
-        self.result.domain = hostname if ':' in hostname else (
-            ascii_hostname.strip('[]')
+        self.normalized_url = normalized_url
+        self.domain = hostname if self.uses_ip_address else (
+            idna.encode(hostname).decode('ascii')
         )
 
-        self.result.scheme = scheme
-        self.result.port = port
+        self.scheme = parsed.scheme.lower()
 
     def _inspect_url(self):
         parsed = urlparse(self.result.normalized_url)
