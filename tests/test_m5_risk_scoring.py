@@ -29,7 +29,7 @@ def test_missing_security_headers_do_not_increase_phishing_risk():
 
 def test_explicit_phishing_language_and_password_field_are_suspicious():
     assessment = make_assessment(
-        make_finding("Explicit phishing or social-engineering indicators", severity="HIGH"),
+        make_finding("Explicit phishing or social-engineering indicators", severity="MEDIUM"),
         make_finding("Password field outside a detected form"),
     )
 
@@ -51,3 +51,29 @@ def test_two_independent_strong_indicators_are_high_risk():
     )
 
     assert classify_risk(assessment) == RiskLevel.HIGH
+
+
+def test_passive_m5_partial_with_inspection_findings_can_return_low():
+    assessment = AssessmentEvidence(
+        findings=[make_finding("Missing HSTS header", severity="MEDIUM")],
+        module_statuses={
+            "M1": "completed",
+            "M5": "partial",
+            "M2:https://example.com/": "completed",
+        },
+    )
+
+    assert classify_risk(assessment) == RiskLevel.LOW
+
+
+def test_m5_partial_without_inspection_findings_remains_inconclusive():
+    assessment = AssessmentEvidence(
+        findings=[],
+        module_statuses={
+            "M1": "completed",
+            "M5": "partial",
+            "M2:https://httpbin.org/": "completed",
+        },
+    )
+
+    assert classify_risk(assessment) == RiskLevel.INCONCLUSIVE

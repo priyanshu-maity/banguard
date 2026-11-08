@@ -1,3 +1,4 @@
+
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -28,27 +29,9 @@ def _result_items(results):
         return list(results.items())
 
     if isinstance(results, (list, tuple)):
-        return [(str(index), result) for index, result in enumerate(results)]
+        return [(None, result) for result in results]
 
-    return [("", results)]
-
-
-def _add_finding(output, title, description, severity, module, impact=None, remediation=None):
-    key = (title, description, module)
-
-    if any((item.title, item.description, item.source_module) == key for item in output.findings):
-        return
-
-    output.findings.append(ReportFinding(title=title, description=description, severity=severity, source_module=module, impact=impact, remediation=remediation))
-
-
-def _add_evidence(output, description, module, reference=None):
-    key = (description, module, reference)
-
-    if any((item.description, item.source_module, item.reference) == key for item in output.evidence):
-        return
-
-    output.evidence.append(ReportEvidence(description=description, source_module=module, reference=reference))
+    return [(None, results)]
 
 
 def _record_status(output, module, result, reference=None):
@@ -75,50 +58,23 @@ def _record_result_statuses(output, module, results):
 
 def _collect_m1_single(output, result):
     data = _unwrap(result)
-
-    if data is None:
+    if not data:
         return
 
-    checks = [
-        ("has_userinfo", "Credentials embedded in URL", "high", "The URL contains embedded user information."),
-        ("uses_ip_address", "IP address used as URL hostname", "medium", "The URL uses an IP address instead of a domain name."),
-        ("excessive_hyphens", "Excessive hyphens in domain", "low", "The domain contains an unusually high number of hyphens."),
-        ("excessive_subdomains", "Excessive subdomains", "low", "The domain contains an unusually high number of subdomains."),
-        ("typosquatting_detected", "Potential typosquatting detected", "high", "The domain resembles a known brand."),
-        ("uses_punycode", "Punycode detected", "medium", "The domain contains Punycode-encoded components."),
-        ("mixed_unicode_scripts", "Mixed Unicode scripts detected", "high", "The domain combines characters from different writing systems."),
-        ("brand_in_subdomain", "Brand name found in subdomain", "high", "A protected brand name appears in a subdomain."),
-        ("suspicious_keywords", "Suspicious keywords in URL", "low", "The URL contains keywords commonly associated with suspicious links."),
-        ("newly_registered_domain", "Newly registered domain", "medium", "The domain is less than 30 days old."),
-        ("missing_a_record", "Missing A record", "low", "The domain does not have the expected A record."),
-        ("missing_mx_on_impersonating_domain", "Impersonating domain has no MX record", "medium", "A brand-impersonating domain lacks an MX record."),
-        ("cross_domain_redirect", "Cross-domain redirect detected", "medium", "The URL redirects to a different registered domain."),
-        ("url_shortener_detected", "URL shortener detected", "medium", "A known URL-shortening service appears in the redirect chain."),
-        ("ssrf_attempt_detected", "Unsafe redirect destination detected", "high", "A redirect destination resolved to a non-public address."),
-    ]
+    for finding in getattr(data, "findings", []):
+        output.findings.append(
+            ReportFinding(
+                title=finding.title,
+                description=finding.evidence,
+                severity=finding.severity,
+                source_module="M1",
+                impact=getattr(finding, "impact", ""),
+                remediation=getattr(finding, "remediation", ""),
+            )
+        )
 
-    for field_name, title, severity, description in checks:
-        value = getattr(data, field_name, None)
-
-        if not isinstance(value, tuple) or not value or value[0] is not True:
-            continue
-
-        details = value[1] if len(value) > 1 else None
-        description = f"{description} Details: {details}" if details else description
-
-        _add_finding(output, title, description, severity, "M1")
-        _add_evidence(output, description, "M1")
-
-    domain_exists = getattr(data, "domain_exists", None)
-
-    if isinstance(domain_exists, tuple) and domain_exists and domain_exists[0] is False:
-        _add_evidence(output, f"Domain resolution failed: {domain_exists[1]}", "M1")
-
-    redirect_chain = getattr(data, "redirect_chain", None)
-
-    if isinstance(redirect_chain, tuple) and redirect_chain and redirect_chain[0]:
-        for redirect in redirect_chain[1]:
-            _add_evidence(output, f"Redirect observed: {redirect}", "M1", redirect)
+    for item in getattr(data, "evidence", []):
+        output.evidence.append(item)
 
 
 def _collect_m1(output, results):
@@ -127,138 +83,122 @@ def _collect_m1(output, results):
 
 
 def _collect_m2(output, results):
-    for url, result in _result_items(results):
+    for reference, result in _result_items(results):
         data = _unwrap(result)
-        _record_status(output, "M2", result, url or None)
-
-        if data is None:
-            error = getattr(result, "error", None)
-
-            if error:
-                _add_evidence(output, f"TLS analysis error: {error}", "M2", url or None)
-
+        if not data:
             continue
 
-        checks = [
-            ("verification_failed", "Certificate verification failed", "high", "Certificate-chain verification failed."),
-            ("certificate_expired", "Expired TLS certificate", "high", "The retrieved leaf certificate has expired."),
-            ("certificate_not_yet_valid", "TLS certificate not yet valid", "high", "The retrieved leaf certificate is not yet valid."),
-            ("hostname_mismatch", "TLS hostname mismatch", "high", "The certificate does not match the requested hostname."),
-            ("self_signed", "Self-signed TLS certificate", "high", "The retrieved certificate is self-signed."),
-            ("unknown_issuer", "Untrusted certificate issuer", "medium", "The certificate chain does not lead to a trusted root."),
-            ("distrusted_ca_match", "Distrusted certificate authority match", "high", "The certificate matches a locally distrusted CA entry."),
-        ]
+        for finding in getattr(data, "findings", []):
+            output.findings.append(
+                ReportFinding(
+                    title=finding.title,
+                    description=getattr(finding, "description", ""),
+                    severity=finding.severity,
+                    source_module="M2",
+                    impact=getattr(finding, "impact", ""),
+                    remediation=getattr(finding, "remediation", ""),
+                )
+            )
 
-        https_available = getattr(data, "https_available", None)
-
-        if isinstance(https_available, tuple) and https_available and https_available[0] is False:
-            _add_evidence(output, f"TLS handshake was unavailable: {https_available[1]}", "M2", url or None)
-
-        for field_name, title, severity, description in checks:
-            value = getattr(data, field_name, None)
-
-            if not isinstance(value, tuple) or not value or value[0] is not True:
-                continue
-
-            details = value[1] if len(value) > 1 else None
-            description = f"{description} Details: {details}" if details else description
-            description = f"{description} URL: {url}"
-
-            _add_finding(output, title, description, severity, "M2")
-            _add_evidence(output, description, "M2", url or None)
+        for item in getattr(data, "evidence", []):
+            output.evidence.append(item)
 
 
 def _collect_m3(output, result):
     data = _unwrap(result)
-
-    if data is None:
+    if not data:
         return
 
-    checks = [
-        ("urgency", "Urgency language detected", "low", "The message contains urgency language."),
-        ("fear_or_threat", "Fear or threat language detected", "medium", "The message contains fear or threat language."),
-        ("authority_impersonation", "Authority impersonation indicator", "medium", "The message contains language claiming or implying authority."),
-        ("financial_manipulation", "Financial manipulation indicator", "medium", "The message contains financial manipulation language."),
-        ("credential_requests", "Credential request detected", "high", "The message requests credentials or sensitive account information."),
-        ("reward_or_prize_lure", "Reward or prize lure detected", "medium", "The message contains a reward or prize lure."),
-        ("secrecy_or_isolation", "Secrecy or isolation language detected", "medium", "The message encourages secrecy or discourages consultation."),
-    ]
-
-    for field_name, title, severity, description in checks:
-        value = getattr(data, field_name, None)
-
-        if not isinstance(value, tuple) or not value or value[0] is not True:
-            continue
-
-        snippets = value[1] if len(value) > 1 else []
-        details = "; ".join(snippets) if snippets else "No exact evidence snippet was provided."
-        description = f"{description} Evidence: {details}"
-
-        _add_finding(output, title, description, severity, "M3")
-        _add_evidence(output, description, "M3")
-
-    if data.claimed_brand:
-        _add_evidence(output, f"The message claims association with the brand: {data.claimed_brand}. This claim has not been independently verified.", "M3")
-
-
-def _collect_m4(output, result, investigation_id):
-    data = _unwrap(result)
-
-    if data is None:
-        return
-
-    grouped = {}
-
-    for relationship in data.relationships:
-        historical_ids = {item for item in relationship.investigation_ids if item != investigation_id}
-
-        for shared in relationship.shared_indicators:
-            key = (shared.indicator_type.value, shared.value)
-
-            if key not in grouped:
-                grouped[key] = {"investigations": set(), "sources": set()}
-
-            grouped[key]["investigations"].update(historical_ids)
-            grouped[key]["sources"].update(source.module for source in shared.sources)
-
-    for (indicator_type, value), details in grouped.items():
-        if not details["investigations"]:
-            continue
-
-        investigations = ", ".join(sorted(details["investigations"]))
-        sources = ", ".join(sorted(details["sources"]))
-
-        description = (
-            f"Historical correlation: shared {indicator_type} indicator {value}. "
-            f"Previously observed in investigations: {investigations}. "
-            f"Original indicator sources: {sources}. "
-            "A shared indicator does not establish common ownership, coordination, or malicious activity."
+    for finding in getattr(data, "findings", []):
+        output.findings.append(
+            ReportFinding(
+                title=finding.title,
+                description=getattr(finding, "description", ""),
+                severity=finding.severity,
+                source_module="M3",
+                impact=getattr(finding, "impact", ""),
+                remediation=getattr(finding, "remediation", ""),
+            )
         )
 
-        _add_evidence(output, description, "M4")
+    for item in getattr(data, "evidence", []):
+        output.evidence.append(item)
 
 
 def _collect_m5_single(output, result):
     data = _unwrap(result)
-
-    if data is None:
+    if not data:
         return
 
-    for finding in data.findings:
-        severity = getattr(finding.severity, "value", str(finding.severity))
-        _add_finding(output, finding.title, finding.evidence, severity, "M5", finding.impact, finding.remediation)
-        _add_evidence(output, finding.evidence, "M5", data.final_url)
+    for finding in getattr(data, "findings", []):
+        output.findings.append(
+            ReportFinding(
+                title=finding.title,
+                description=finding.evidence,
+                severity=finding.severity,
+                source_module="M5",
+                impact=finding.impact,
+                remediation=finding.remediation,
+            )
+        )
 
-    for limitation in data.limitations:
-        _add_evidence(output, f"Analysis limitation: {limitation}", "M5")
+    for item in getattr(data, "checks_completed", []):
+        output.evidence.append(
+            ReportEvidence(
+                source_module="M5",
+                description=item,
+            )
+        )
 
-    if data.error:
-        _add_evidence(output, f"Website security analysis error: {data.error}", "M5")
+    if getattr(data, "final_url", None):
+        output.evidence.append(
+            ReportEvidence(
+                source_module="M5",
+                description=f"Final inspected URL: {data.final_url}",
+            )
+        )
+
+    for limitation in getattr(data, "limitations", []):
+        output.evidence.append(
+            ReportEvidence(
+                source_module="M5",
+                description=f"Limitation: {limitation}",
+            )
+        )
+
+    if getattr(data, "error", None):
+        output.evidence.append(
+            ReportEvidence(
+                source_module="M5",
+                description=f"Inspection error: {data.error}",
+            )
+        )
 
 
 def _collect_m5(output, results):
     for _, result in _result_items(results):
         _collect_m5_single(output, result)
+
+
+def _collect_m4(output, result, investigation_id):
+    data = _unwrap(result)
+    if not data:
+        return
+
+    for finding in getattr(data, "findings", []):
+        output.findings.append(
+            ReportFinding(
+                title=finding.title,
+                description=getattr(finding, "description", ""),
+                severity=finding.severity,
+                source_module="M4",
+                impact=getattr(finding, "impact", ""),
+                remediation=getattr(finding, "remediation", ""),
+            )
+        )
+
+    for item in getattr(data, "evidence", []):
+        output.evidence.append(item)
 
 
 def _deduplicate_indicators(indicators):
@@ -274,7 +214,11 @@ def _deduplicate_indicators(indicators):
             grouped[key].append(indicator.source_module)
 
     return [
-        ReportIndicator(indicator_type=indicator_type, value=value, source_module=", ".join(sources))
+        ReportIndicator(
+            indicator_type=indicator_type,
+            value=value,
+            source_module=", ".join(sources),
+        )
         for (indicator_type, value), sources in grouped.items()
     ]
 
@@ -294,7 +238,6 @@ def _record_url_module_statuses(output, m1_result, m5_result):
 
 def collect_assessment_evidence(investigation_id, original_url="", m1_result=None, m2_results=None, m3_result=None, m4_result=None, m5_result=None, investigation_type="url"):
     """Collect evidence according to the type of investigation."""
-
     if investigation_type not in ("url", "message", "combined"):
         raise ValueError("investigation_type must be 'url', 'message', or 'combined'.")
 
@@ -332,19 +275,23 @@ def collect_assessment_evidence(investigation_id, original_url="", m1_result=Non
 
     _collect_m4(output, m4_result, investigation_id)
 
-    # Extract indicators from all available module results.
     shared_indicators = extract_indicators(
         investigation_id=investigation_id,
         original_url=original_url or "",
         m1_result=[result for _, result in _result_items(m1_result)],
-        m2_result=None,
         m3_result=m3_result,
         m5_result=[result for _, result in _result_items(m5_result)],
     )
 
     for shared in shared_indicators:
         for source in shared.sources:
-            output.indicators.append(ReportIndicator(indicator_type=shared.indicator_type.value, value=shared.value, source_module=source.module))
+            output.indicators.append(
+                ReportIndicator(
+                    indicator_type=shared.indicator_type.value,
+                    value=shared.value,
+                    source_module=source.module,
+                )
+            )
 
     output.indicators = _deduplicate_indicators(output.indicators)
     return output
@@ -352,7 +299,6 @@ def collect_assessment_evidence(investigation_id, original_url="", m1_result=Non
 
 def classify_risk(assessment: AssessmentEvidence) -> RiskLevel:
     """Classify investigation risk using conservative, evidence-based rules."""
-
     strong_m1 = {
         "Potential typosquatting detected",
         "Mixed Unicode scripts detected",
@@ -396,15 +342,31 @@ def classify_risk(assessment: AssessmentEvidence) -> RiskLevel:
             elif finding.title == "Urgency language detected":
                 score += 0.25
 
-    # TLS issues are security concerns, but do not independently establish maliciousness.
+        elif finding.source_module == "M5":
+            title = finding.title.lower()
+
+            if title.startswith("missing ") and "header" in title:
+                continue
+
+            if "submit" in title and any(term in title for term in ("external", "different", "unrelated")):
+                strong_count += 1
+                score += 3.0
+            elif "brand" in title and any(term in title for term in ("credential", "password", "sensitive")):
+                score += 2.5
+            elif "explicit phishing" in title or "social-engineering" in title or "social engineering" in title:
+                score += 1.5
+            elif any(term in title for term in ("sensitive form", "credential collection", "password form")):
+                score += 2.0
+            elif "password field" in title:
+                score += 1.0
+            elif any(term in title for term in ("suspicious account", "payment language", "account language")):
+                score += 0.75
+            elif "meta refresh" in title or "external iframe" in title:
+                score += 0.25
+
     if any(f.source_module == "M2" for f in assessment.findings):
         score += 0.75
 
-    # Website security findings have limited weight.
-    if any(f.source_module == "M5" for f in assessment.findings):
-        score += 0.5
-
-    # Strong findings can independently elevate risk despite incomplete coverage.
     if strong_count >= 2 or (strong_count >= 1 and score >= 5.0):
         return RiskLevel.HIGH
 
@@ -418,36 +380,42 @@ def classify_risk(assessment: AssessmentEvidence) -> RiskLevel:
     m5_statuses = [status for module, status in statuses.items() if module == "M5" or module.startswith("M5:")]
 
     url_analysis_attempted = any(
-        status not in ("not_applicable", "not_provided") for status in m1_statuses + m2_statuses + m5_statuses)
+        status not in ("not_applicable", "not_provided")
+        for status in m1_statuses + m2_statuses + m5_statuses
+    )
+
+    m5_partial_has_evidence = any(f.source_module == "M5" for f in assessment.findings)
+
+    m5_coverage_complete = (
+        bool(m5_statuses)
+        and all(
+            status == "completed" or (status == "partial" and m5_partial_has_evidence)
+            for status in m5_statuses
+        )
+    )
+
     url_coverage_complete = (
         bool(m1_statuses)
-        and bool(m5_statuses)
         and all(status == "completed" for status in m1_statuses)
-        and all(status == "completed" for status in m5_statuses)
+        and m5_coverage_complete
         and all(status in ("completed", "skipped") for status in m2_statuses)
     )
 
     if assessment.investigation_type == "url":
         coverage_complete = url_coverage_complete
-
-    elif assessment.investigation_type == "message":
-        coverage_complete = statuses.get("M3") == "completed" and (not url_analysis_attempted or url_coverage_complete)
-
-    elif assessment.investigation_type == "combined":
-        coverage_complete = statuses.get("M3") == "completed" and (not url_analysis_attempted or url_coverage_complete)
-
+    elif assessment.investigation_type in ("message", "combined"):
+        coverage_complete = (
+            statuses.get("M3") == "completed"
+            and (not url_analysis_attempted or url_coverage_complete)
+        )
     else:
         coverage_complete = False
 
-    if not coverage_complete:
-        return RiskLevel.INCONCLUSIVE
-
-    return RiskLevel.LOW
+    return RiskLevel.LOW if coverage_complete else RiskLevel.INCONCLUSIVE
 
 
 def create_threat_report(investigation_id: str, assessment: AssessmentEvidence) -> ThreatReport:
     """Generate a unified ThreatReport from collected assessment evidence."""
-
     risk_level = classify_risk(assessment)
     finding_count = len(assessment.findings)
     indicator_count = len(assessment.indicators)
@@ -471,7 +439,9 @@ def create_threat_report(investigation_id: str, assessment: AssessmentEvidence) 
             severity = str(finding.severity).lower()
             severity_counts[severity] = severity_counts.get(severity, 0) + 1
 
-        severity_summary = ", ".join(f"{count} {severity}" for severity, count in sorted(severity_counts.items()))
+        severity_summary = ", ".join(
+            f"{count} {severity}" for severity, count in sorted(severity_counts.items())
+        )
         summary += f" Severity breakdown: {severity_summary}."
     else:
         summary += " No findings were recorded."
@@ -498,7 +468,6 @@ def create_threat_report(investigation_id: str, assessment: AssessmentEvidence) 
         indicators=list(assessment.indicators),
         evidence=list(assessment.evidence),
     )
-
 
 def submit_and_verify_report(report):
     """Submit a generated ThreatReport to M6 and verify its integrity."""

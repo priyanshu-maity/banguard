@@ -1,3 +1,4 @@
+
 import http.client
 import socket
 import ssl
@@ -15,8 +16,10 @@ from core.network_safety import (
 REQUEST_TIMEOUT_SECONDS = 5
 TOTAL_TIMEOUT_SECONDS = 20
 MAX_REDIRECTS = 5
+MAX_RESPONSE_BODY_BYTES = 1024 * 1024
 ALLOWED_PORTS = {80, 443, 8080, 8443}
 REDIRECT_STATUS_CODES = {301, 302, 303, 307, 308}
+HTML_CONTENT_TYPES = {"text/html", "application/xhtml+xml"}
 USER_AGENT = "BanGuard-SecurityCheck/1.0"
 
 
@@ -34,6 +37,9 @@ class FetchedPage:
     headers: dict[str, str]
     resolved_ips: list[str]
     hops: list[RedirectHop]
+    body: bytes = b""
+    content_type: str | None = None
+    body_truncated: bool = False
 
     @property
     def redirect_count(self) -> int:
@@ -41,7 +47,7 @@ class FetchedPage:
 
 
 class FetchError(Exception):
-    def __init__(self, kind: str, message: str, hop: int = 0, hops: list[RedirectHop] | None = None,):
+    def __init__(self, kind: str, message: str, hop: int = 0, hops: list[RedirectHop] | None = None):
         super().__init__(message)
         self.kind = kind
         self.message = message
@@ -57,53 +63,55 @@ class _PinnedHTTPConnection(http.client.HTTPConnection):
         self._pinned_ip = pinned_ip
 
     def connect(self):
-        self.sock = socket.create_connection(
-            (self._pinned_ip, self.port), self.timeout
-        )
+        self.sock = socket.create_connection((self._pinned_ip, self.port), self.timeout)
 
 
 class _PinnedHTTPSConnection(http.client.HTTPSConnection):
-    """Connects to a pre-verified IP, but still verifies the certificate
-    against the original hostname (SNI and hostname check)."""
+    """Connects to a pre-verified IP while verifying TLS against the original hostname."""
 
     def __init__(self, hostname: str, port: int, pinned_ip: str, timeout: float):
         self._tls_context = ssl.create_default_context()
-        super().__init__(
-            hostname, port, timeout=timeout, context=self._tls_context
-        )
+        super().__init__(hostname, port, timeout=timeout, context=self._tls_context)
         self._pinned_ip = pinned_ip
 
     def connect(self):
-        sock = socket.create_connection(
-            (self._pinned_ip, self.port), self.timeout
-        )
+        sock = socket.create_connection((self._pinned_ip, self.port), self.timeout)
         try:
-            self.sock = self._tls_context.wrap_socket(
-                sock, server_hostname=self.host
-            )
+            self.sock = self._tls_context.wrap_socket(sock, server_hostname=self.host)
         except Exception:
             sock.close()
             raise
 
-def _request_once(scheme: str, hostname: str, port: int, ips: list[str], target: str, hop: int, hops: list[RedirectHop],) -> tuple[int, dict[str, str]]:
-    """Send one GET to a verified IP and read only the status and headers."""
-    connection_class = (
-        _PinnedHTTPSConnection if scheme == "https" else _PinnedHTTPConnection
-    )
+
+def _request_once(
+    scheme: str,
+    hostname: str,
+    port: int,
+    ips: list[str],
+    target: str,
+    hop: int,
+    hops: list[RedirectHop],
+) -> tuple[int, dict[str, str], bytes, str | None, bool]:
+    """Send one GET to a verified IP and retrieve bounded HTML content."""
+
+    connection_class = _PinnedHTTPSConnection if scheme == "https" else _PinnedHTTPConnection
     last_error: Exception | None = None
 
     for ip in ips:
         connection = connection_class(hostname, port, ip, REQUEST_TIMEOUT_SECONDS)
+
         try:
             connection.request(
                 "GET",
                 target,
                 headers={
                     "User-Agent": USER_AGENT,
-                    "Accept": "*/*",
+                    "Accept": "text/html,application/xhtml+xml",
+                    "Accept-Encoding": "identity",
                     "Connection": "close",
                 },
             )
+
             response = connection.getresponse()
 
             headers: dict[str, str] = {}
@@ -111,7 +119,26 @@ def _request_once(scheme: str, hostname: str, port: int, ips: list[str], target:
                 key = name.lower()
                 headers[key] = f"{headers[key]}, {value}" if key in headers else value
 
-            return response.status, headers
+            raw_content_type = headers.get("content-type", "")
+            content_type = raw_content_type.split(";", 1)[0].strip().lower() or None
+
+            body = b""
+            body_truncated = False
+
+            is_redirect = response.status in REDIRECT_STATUS_CODES and bool(headers.get("location"))
+            content_encoding = headers.get("content-encoding", "identity").strip().lower()
+
+            if (
+                not is_redirect
+                and content_type in HTML_CONTENT_TYPES
+                and content_encoding in ("", "identity")
+            ):
+                body = response.read(MAX_RESPONSE_BODY_BYTES + 1)
+                if len(body) > MAX_RESPONSE_BODY_BYTES:
+                    body = body[:MAX_RESPONSE_BODY_BYTES]
+                    body_truncated = True
+
+            return response.status, headers, body, content_type, body_truncated
 
         except ssl.SSLError as error:
             raise FetchError(
@@ -120,29 +147,32 @@ def _request_once(scheme: str, hostname: str, port: int, ips: list[str], target:
                 hop,
                 hops,
             ) from error
+
         except (OSError, http.client.HTTPException) as error:
             last_error = error
+
         finally:
             connection.close()
 
     raise FetchError(
-        "connect", f"Could not connect to {hostname}: {last_error}", hop, hops
+        "connect",
+        f"Could not connect to {hostname}: {last_error}",
+        hop,
+        hops,
     )
 
 
 def safe_fetch(url: str, first_hop_ips: list[str] | None = None) -> FetchedPage:
-    """Fetch a URL's headers, following redirects manually and safely.
+    """
+    Fetch a URL's headers and bounded HTML body, following redirects manually.
 
     Every hop is resolved, checked for public addresses and connected to by
-    IP, so a redirect cannot lead us to an internal address and DNS cannot
-    change between the check and the connection (DNS rebinding).
+    IP. This prevents redirects to internal addresses and DNS rebinding.
 
-    first_hop_ips lets a caller that has already verified the first hostname
-    reuse those IPs; otherwise the first hop is resolved here.
-
-    Only the status line and headers are read, never the response body.
-    Raises FetchError on any failure.
+    Only HTML/XHTML bodies are read, with a strict maximum response size.
+    JavaScript is never executed.
     """
+
     deadline = time.monotonic() + TOTAL_TIMEOUT_SECONDS
     current_url = url
     hops: list[RedirectHop] = []
@@ -166,9 +196,7 @@ def safe_fetch(url: str, first_hop_ips: list[str] | None = None) -> FetchedPage:
             port = parts.port or (443 if scheme == "https" else 80)
             hostname = normalise_hostname(parts.hostname)
         except ValueError as error:
-            raise FetchError(
-                "unsupported", f"Invalid URL: {error}", hop, hops
-            ) from error
+            raise FetchError("unsupported", f"Invalid URL: {error}", hop, hops) from error
 
         if port not in ALLOWED_PORTS:
             raise FetchError(
@@ -186,8 +214,7 @@ def safe_fetch(url: str, first_hop_ips: list[str] | None = None) -> FetchedPage:
             except NonPublicAddressError as error:
                 raise FetchError(
                     "blocked",
-                    f"{current_url} resolves to a non-public address "
-                    f"({error.address}).",
+                    f"{current_url} resolves to a non-public address ({error.address}).",
                     hop,
                     hops,
                 ) from error
@@ -203,9 +230,10 @@ def safe_fetch(url: str, first_hop_ips: list[str] | None = None) -> FetchedPage:
         if parts.query:
             target += "?" + parts.query
 
-        status_code, headers = _request_once(
+        status_code, headers, body, content_type, body_truncated = _request_once(
             scheme, hostname, port, ips, target, hop, hops
         )
+
         hops.append(RedirectHop(current_url, status_code, ips))
 
         location = headers.get("location")
@@ -213,8 +241,20 @@ def safe_fetch(url: str, first_hop_ips: list[str] | None = None) -> FetchedPage:
             current_url = urljoin(current_url, location)
             continue
 
-        return FetchedPage(current_url, status_code, headers, ips, hops)
+        return FetchedPage(
+            final_url=current_url,
+            status_code=status_code,
+            headers=headers,
+            resolved_ips=ips,
+            hops=hops,
+            body=body,
+            content_type=content_type,
+            body_truncated=body_truncated,
+        )
 
     raise FetchError(
-        "redirect", f"More than {MAX_REDIRECTS} redirects.", MAX_REDIRECTS, hops
+        "redirect",
+        f"More than {MAX_REDIRECTS} redirects.",
+        MAX_REDIRECTS,
+        hops,
     )
