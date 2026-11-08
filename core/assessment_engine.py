@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 
-from core.schema import ReportFinding, ReportIndicator, ReportEvidence
+from core.schema import RiskLevel, ReportFinding, ReportIndicator, ReportEvidence
 from engines.threat_correlation.indicator_extractor import extract_indicators
 
 
@@ -173,3 +173,72 @@ def collect_assessment_evidence(investigation_id, original_url, m1_result=None, 
             output.indicators.append(ReportIndicator(indicator_type=shared.indicator_type.value, value=shared.value, source_module=source.module,))
 
     return output
+
+
+def classify_risk(assessment: AssessmentEvidence) -> RiskLevel:
+    """Classify investigation risk using conservative, evidence-based rules."""
+
+    strong_m1 = {
+        "Potential typosquatting detected",
+        "Mixed Unicode scripts detected",
+        "Brand name found in subdomain",
+        "Unsafe redirect destination detected",
+    }
+
+    moderate_m1 = {
+        "Punycode detected",
+        "Suspicious keywords in URL",
+        "Cross-domain redirect detected",
+        "URL shortener detected",
+        "Newly registered domain",
+        "Impersonating domain has no MX record",
+    }
+
+    strong_count = 0
+    score = 0.0
+
+    for finding in assessment.findings:
+        if finding.source_module == "M1":
+            if finding.title in strong_m1:
+                strong_count += 1
+                score += 3.0
+            elif finding.title in moderate_m1:
+                score += 1.5
+            else:
+                score += 0.5
+
+    # TLS issues are security concerns, but do not independently establish that a website is malicious.
+    if any(f.source_module == "M2" for f in assessment.findings):
+        score += 0.75
+
+    # Website security findings have limited weight because missing security controls do not prove malicious intent.
+    if any(f.source_module == "M5" for f in assessment.findings):
+        score += 0.5
+
+    # Strong independent URL signals can justify HIGH risk.
+    if strong_count >= 2 or (strong_count >= 1 and score >= 5.0):
+        return RiskLevel.HIGH
+
+    if strong_count >= 1 or score >= 2.5:
+        return RiskLevel.SUSPICIOUS
+
+    # Check whether enough analysis actually completed.
+    m1_status = assessment.module_statuses.get("M1", "not_provided")
+    m5_status = assessment.module_statuses.get("M5", "not_provided")
+
+    m2_statuses = [
+        status
+        for module, status in assessment.module_statuses.items()
+        if module.startswith("M2:")
+    ]
+
+    coverage_complete = (
+        m1_status == "completed"
+        and m5_status == "completed"
+        and all(status in ("completed", "skipped") for status in m2_statuses)
+    )
+
+    if not coverage_complete:
+        return RiskLevel.INCONCLUSIVE
+
+    return RiskLevel.LOW
