@@ -31,3 +31,16 @@ def _normalize_url(url: str) -> tuple[str | None, str | None]:
 
     except (ValueError, AttributeError, TypeError):
         return None, None
+
+def _normalize_domain(domain: str) -> str | None:
+    """Normalize a domain name for exact comparison."""
+    try:
+        domain = domain.strip().rstrip(".").lower()
+
+        if not domain:
+            return None
+
+        return domain.encode("idna").decode("ascii")
+
+    except (UnicodeError, AttributeError):
+        return None
