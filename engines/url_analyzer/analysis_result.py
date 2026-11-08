@@ -35,3 +35,16 @@ class URLAnalysisResult:
     cross_domain_redirect: tuple[bool, list[str]] = field(default_factory=lambda: (False, []))  # Whether redirects crossed registered domains, and the destination domains
     url_shortener_detected: tuple[bool, list[str]] = field(default_factory=lambda: (False, []))  # Whether known URL shorteners were encountered, and their domains
     ssrf_attempt_detected: tuple[bool, list[str]] = field(default_factory=lambda: (False, []))  # Whether a redirect destination resolved to an unsafe IP, and the corresponding hostnames and IP addresses
+
+    # Threat intelligence: VirusTotal
+    virustotal_malicious: tuple[bool | None, int | None] = (None, None)  # Whether malicious engines detected the URL, and the detection count
+    virustotal_suspicious: tuple[bool | None, int | None] = (None, None)  # Whether suspicious engines detected the URL, and the detection count
+
+    virustotal_harmless_count: int | None = None
+    virustotal_undetected_count: int | None = None
+
+    virustotal_reputation: int | None = None  # VirusTotal community reputation score
+    virustotal_categories: dict[str, str] = field(default_factory=dict)  # URL categorization reported by VirusTotal
+
+    # Threat intelligence: overall
+    threat_intelligence_provider_status: dict[str, str] = field(default_factory=dict)  # Provider status: success, no_report, error, not_configured
