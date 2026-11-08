@@ -118,22 +118,36 @@ def _collect_m2(output, results):
             _add_finding(output, title, description, severity, "M2")
             _add_evidence(output, description, "M2", url)
 
+
 def _collect_m4(output, result):
     data = _unwrap(result)
     if data is None:
         return
 
-    for relationship in data.relationships:
-        investigation_ids = ", ".join(relationship.investigation_ids)
+    grouped = {}
 
+    for relationship in data.relationships:
         for shared in relationship.shared_indicators:
-            indicator_sources = ", ".join(source.module for source in shared.sources)
-            description = (
-                f"Shared {shared.indicator_type.value} indicator: {shared.value}. "
-                f"Related investigations: {investigation_ids}. "
-                f"Original indicator sources: {indicator_sources}."
-            )
-            _add_evidence(output, description, "M4")
+            key = (shared.indicator_type.value, shared.value)
+
+            if key not in grouped:
+                grouped[key] = {"investigations": set(), "sources": set()}
+
+            grouped[key]["investigations"].update(relationship.investigation_ids)
+            grouped[key]["sources"].update(source.module for source in shared.sources)
+
+    for (indicator_type, value), details in grouped.items():
+        investigations = ", ".join(sorted(details["investigations"]))
+        sources = ", ".join(sorted(details["sources"]))
+
+        description = (
+            f"Shared {indicator_type} indicator: {value}. "
+            f"Related investigations: {investigations}. "
+            f"Original indicator sources: {sources}."
+        )
+
+        _add_evidence(output, description, "M4")
+
 
 def _collect_m5(output, result):
     data = _unwrap(result)
