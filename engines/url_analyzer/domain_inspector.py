@@ -23,21 +23,13 @@ class DomainInspector:
         self.public_suffix = None
 
     def inspect(self):
-        print("PASSED 1")
         self._extract_domain_metadata()
-        print("PASSED 2")
         self._check_typosquatting()
-        print("PASSED 3")
         self._check_punycode()
-        print("PASSED 4")
         self._check_mixed_scripts()
-        print("PASSED 5")
         self._check_brand_in_subdomain()
-        print("PASSED 6")
         self._check_suspicious_keywords()
-        print("PASSED 7")
         self._check_domain_structure()
-        print("PASSED 8")
 
     def _extract_domain_metadata(self):
         extracted = self.TLD_EXTRACTOR(self.domain)
