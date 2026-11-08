@@ -7,6 +7,7 @@ from rapidfuzz import fuzz
 from analysis_result import URLAnalysisResult
 from constants.known_brands import KNOWN_BRANDS
 from constants.suspicious_keywords import SUSPICIOUS_KEYWORDS
+from constants.known_scripts import KNOWN_SCRIPTS
 
 
 class DomainInspector:
@@ -82,7 +83,7 @@ class DomainInspector:
 
                 unicode_name = unicodedata.name(char, '')
 
-                for script in self.KNOWN_SCRIPTS:
+                for script in KNOWN_SCRIPTS:
                     if script in unicode_name:
                         detected_scripts.add(script)
                         break
