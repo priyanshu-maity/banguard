@@ -52,6 +52,43 @@ def initialize_database():
             ON indicators (indicator_type, value)
         """)
 
+def save_investigation(investigation_id: str, original_url: str, indicators: list[SharedIndicator],):
+    """Save an investigation and its extracted indicators."""
+
+    initialize_database()
+
+    with _get_connection() as connection:
+        connection.execute("""
+            INSERT OR IGNORE INTO investigations (
+                investigation_id,
+                original_url,
+                created_at
+            )
+            VALUES (?, ?, ?)
+        """, (
+            investigation_id,
+            original_url,
+            datetime.now(timezone.utc).isoformat(),
+        ))
+
+        for indicator in indicators:
+            for source in indicator.sources:
+                connection.execute("""
+                    INSERT OR IGNORE INTO indicators (
+                        investigation_id,
+                        indicator_type,
+                        value,
+                        source_module
+                    )
+                    VALUES (?, ?, ?, ?)
+                """, (
+                    investigation_id,
+                    indicator.indicator_type.value,
+                    indicator.value,
+                    source.module,
+                ))
+
+
 def find_matching_investigations(indicators: list[SharedIndicator], exclude_investigation_id: str | None = None,) -> list[dict]:
     """Find previous investigations containing the supplied indicators."""
 
