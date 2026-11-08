@@ -285,3 +285,17 @@ def create_threat_report(investigation_id: str, assessment: AssessmentEvidence) 
         summary += " Incomplete analyses: " + ", ".join(incomplete) + "."
 
     return ThreatReport(report_id=str(uuid4()), investigation_id=investigation_id, created_at=datetime.now(timezone.utc).isoformat(), risk_level=risk_level, summary=summary, findings=list(assessment.findings), indicators=list(assessment.indicators), evidence=list(assessment.evidence),)
+
+
+def submit_and_verify_report(report):
+    """Submit a generated ThreatReport to M6 and verify its integrity."""
+    from engines.threat_intelligence.report_manager import submit_report
+    from engines.threat_intelligence.verification import verify_report
+
+    submission = submit_report(report)
+    verification = verify_report(report.report_id, submission["version"])
+
+    return {
+        "submission": submission,
+        "verification": verification,
+    }
