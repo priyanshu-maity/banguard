@@ -13,15 +13,14 @@ from constants.known_scripts import KNOWN_SCRIPTS
 class DomainInspector:
     TLD_EXTRACTOR = tldextract.TLDExtract()
 
-    def __init__(self, domain: str, path: str = '/', result: URLAnalysisResult | None = None):
+    def __init__(self, domain: str, result: URLAnalysisResult, path: str = '/'):
         self.domain = domain
+        self.result = result
         self.path = path
 
         self.subdomain = None
         self.registered_domain = None
         self.public_suffix = None
-
-        self.result = URLAnalysisResult() if not result else result
 
     def inspect(self) -> URLAnalysisResult:
         self._extract_domain_metadata()
