@@ -44,3 +44,25 @@ def _normalize_domain(domain: str) -> str | None:
 
     except (UnicodeError, AttributeError):
         return None
+
+def _add_indicator(indicators: dict, indicator_type: IndicatorType, value: str, investigation_id: str, module: str,):
+    """Add an indicator while avoiding duplicate values and sources."""
+    if not isinstance(value, str) or not value.strip():
+        return
+
+    value = value.strip()
+    key = (indicator_type, value)
+
+    if key not in indicators:
+        indicators[key] = SharedIndicator(
+            indicator_type=indicator_type,
+            value=value,
+        )
+
+    source = IndicatorSource(
+        investigation_id=investigation_id,
+        module=module,
+    )
+
+    if source not in indicators[key].sources:
+        indicators[key].sources.append(source)
