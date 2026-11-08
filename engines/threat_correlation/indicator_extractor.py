@@ -104,6 +104,7 @@ def extract_indicators(investigation_id: str, original_url: str, m1_result=None,
             if normalized_domain:
                 _add_indicator(indicators, IndicatorType.DOMAIN, normalized_domain, investigation_id, "M1",)
 
+        # SSRF-related hostnames
         for value in m1.ssrf_attempt_detected[1]:
             hostname = value.split(" -> ", 1)[0].strip()
             try:
@@ -111,7 +112,7 @@ def extract_indicators(investigation_id: str, original_url: str, m1_result=None,
                 continue
             except ValueError:
                 normalized_domain = _normalize_domain(hostname)
-                if normalized_domain:
+                if normalized_domain and normalized_domain != "localhost":
                     _add_indicator(indicators, IndicatorType.DOMAIN, normalized_domain, investigation_id, "M1")
 
     # M3: Message analysis
