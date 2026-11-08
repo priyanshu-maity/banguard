@@ -1,6 +1,6 @@
 from urllib.parse import urlparse
 
-from analysis_result import URLAnalysisResult
+from .analysis_result import URLAnalysisResult
 from url_normalizer import URLNormalizer
 from domain_inspector import DomainInspector
 from dns_analyzer import DNSAnalyzer

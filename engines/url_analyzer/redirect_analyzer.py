@@ -5,7 +5,7 @@ import tldextract
 
 from urllib.parse import urlparse, urljoin
 
-from analysis_result import URLAnalysisResult
+from .analysis_result import URLAnalysisResult
 from constants.url_shorteners import URL_SHORTENERS
 
 

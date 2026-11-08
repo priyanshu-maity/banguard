@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 import dns.resolver
 import whois
 
-from analysis_result import URLAnalysisResult
+from .analysis_result import URLAnalysisResult
 
 
 class DNSAnalyzer:

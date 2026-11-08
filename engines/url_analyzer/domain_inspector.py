@@ -4,7 +4,7 @@ import idna
 import tldextract
 from rapidfuzz import fuzz
 
-from analysis_result import URLAnalysisResult
+from .analysis_result import URLAnalysisResult
 from constants.known_brands import KNOWN_BRANDS
 from constants.suspicious_keywords import SUSPICIOUS_KEYWORDS
 from constants.known_scripts import KNOWN_SCRIPTS

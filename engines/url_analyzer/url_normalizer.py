@@ -2,7 +2,7 @@ import ipaddress
 import idna
 from urllib.parse import urlparse, urlunparse
 
-from analysis_result import URLAnalysisResult
+from .analysis_result import URLAnalysisResult
 
 
 class URLNormalizer:
