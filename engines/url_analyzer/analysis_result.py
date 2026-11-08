@@ -25,6 +25,7 @@ class URLAnalysisResult:
     suspicious_keywords: tuple[bool, list[str]] = field(default_factory=lambda: (False, []))  # Whether suspicious keywords are present, and the matched keywords
 
     # DNS analysis
+    domain_exists: tuple[bool | None, str | None] = (None, None) # Whether the domain exists, and the reason if it does not
     newly_registered_domain: tuple[bool | None, int | None] = (None, None)  # Whether the domain is under 30 days old, and its age in days
     missing_a_record: tuple[bool | None, str | None] = (None, None)  # Whether the domain lacks an A record, and the reason if detected
     missing_mx_on_impersonating_domain: tuple[bool | None, str | None] = (None, None)  # Whether a brand-impersonating domain lacks an MX record, and the reason if detected

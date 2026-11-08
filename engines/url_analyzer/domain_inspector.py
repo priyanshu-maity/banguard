@@ -23,13 +23,21 @@ class DomainInspector:
         self.public_suffix = None
 
     def inspect(self):
+        print("PASSED 1")
         self._extract_domain_metadata()
+        print("PASSED 2")
         self._check_typosquatting()
+        print("PASSED 3")
         self._check_punycode()
+        print("PASSED 4")
         self._check_mixed_scripts()
+        print("PASSED 5")
         self._check_brand_in_subdomain()
+        print("PASSED 6")
         self._check_suspicious_keywords()
+        print("PASSED 7")
         self._check_domain_structure()
+        print("PASSED 8")
 
     def _extract_domain_metadata(self):
         extracted = self.TLD_EXTRACTOR(self.domain)
@@ -39,6 +47,10 @@ class DomainInspector:
         self.public_suffix = extracted.suffix or None
 
     def _check_typosquatting(self):
+        if self.registered_domain is None:
+            self.result.typosquatting_detected = (False, [])
+            return
+
         domain_label = self.registered_domain.split('.')[0]
 
         detected_brands = []
@@ -96,7 +108,7 @@ class DomainInspector:
         )
 
     def _check_brand_in_subdomain(self):
-        if not self.subdomain:
+        if not self.subdomain or not self.registered_domain:
             self.result.brand_in_subdomain = (False, [])
             return
 

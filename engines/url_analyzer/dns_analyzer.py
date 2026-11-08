@@ -15,9 +15,34 @@ class DNSAnalyzer:
         self.resolver.lifetime = 5
 
     def analyze(self):
+        self.result.domain_exists = self._check_domain_existence()
+
+        if self.result.domain_exists[0] is not True:
+            self.result.missing_a_record = (None, None)
+            self.result.missing_mx_on_impersonating_domain = (None, None)
+            self.result.newly_registered_domain = (None, None)
+            return
+
         self._check_a_records()
         self._check_mx_records()
         self._check_domain_age()
+
+    def _check_domain_existence(self) -> tuple[bool | None, str | None]:
+        try:
+            self.resolver.resolve(self.domain, 'A')
+            return True, f'Domain exists: {self.domain}'
+
+        except dns.resolver.NXDOMAIN:
+            return False, f'Domain does not exist: {self.domain}'
+
+        except dns.resolver.NoAnswer as error:
+            if error.response and error.response.rcode() == dns.rcode.NOERROR:
+                return True, f'Domain exists but has no A record: {self.domain}'
+
+            return None, 'Could not determine domain existence'
+
+        except (dns.exception.DNSException, OSError):
+            return None, 'DNS resolution failed'
 
     def _check_a_records(self):
         has_records, records = self._resolve_records('A')
