@@ -83,7 +83,7 @@ def register_report_on_chain(report_id: str, version: int, content_hash: str) ->
         "from": account.address,
         "nonce": w3.eth.get_transaction_count(account.address),
         "chainId": CHAIN_ID,
-        "gas": 200000,
+        "gas": 600000,
         "gasPrice": w3.eth.gas_price
     })
 
