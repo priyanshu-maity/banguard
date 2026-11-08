@@ -15,3 +15,6 @@ def serialize_report(report: ThreatReport) -> str:
     report_data = asdict(report)
     return json.dumps(report_data, default=_serialize_value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
+def generate_report_hash(report: ThreatReport) -> str:
+    report_json = serialize_report(report)
+    return hashlib.sha256(report_json.encode("utf-8")).hexdigest()
