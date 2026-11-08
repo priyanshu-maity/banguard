@@ -28,3 +28,9 @@ class URLAnalysisResult:
     newly_registered_domain: tuple[bool | None, int | None] = (None, None)  # Whether the domain is under 30 days old, and its age in days
     missing_a_record: tuple[bool | None, str | None] = (None, None)  # Whether the domain lacks an A record, and the reason if detected
     missing_mx_on_impersonating_domain: tuple[bool | None, str | None] = (None, None)  # Whether a brand-impersonating domain lacks an MX record, and the reason if detected
+
+    # Redirect chain analysis
+    redirect_chain: tuple[bool, list[str]] = (False, field(default_factory=list))  # Whether redirects occurred, and the sequence of redirect URLs
+    cross_domain_redirect: tuple[bool, list[str]] = (False, field(default_factory=list))  # Whether redirects crossed registered domains, and the destination domains
+    url_shortener_detected: tuple[bool, list[str]] = (False, field(default_factory=list))  # Whether known URL shorteners were encountered, and their domains
+    ssrf_attempt_detected: tuple[bool, list[str]] = (False, field(default_factory=list))  # Whether a redirect destination resolved to an unsafe IP, and the corresponding hostnames and IP addresses
