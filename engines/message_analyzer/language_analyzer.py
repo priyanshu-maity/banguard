@@ -1,18 +1,15 @@
+
 import os
 import json
-from dotenv import load_dotenv
 
+from dotenv import load_dotenv
 from groq import Groq
 
 from .analysis_result import MessageAnalysisResult
 from .system_prompt import SYSTEM_PROMPT
 
 
-load_dotenv()
-
 class LanguageAnalyzer:
-    GROQ_API_KEY = os.getenv('GROQ_API_KEY')
-
     SIGNALS = [
         'urgency',
         'fear_or_threat',
@@ -27,24 +24,26 @@ class LanguageAnalyzer:
         self.message = message
         self.result = result
 
-        self.client = client or Groq(api_key=self.GROQ_API_KEY)
+        if client is not None:
+            self.client = client
+            return
+
+        load_dotenv()
+        api_key = os.getenv('GROQ_API_KEY')
+
+        if not api_key:
+            raise RuntimeError('GROQ_API_KEY is not configured. Add it to your .env file.')
+
+        self.client = Groq(api_key=api_key)
 
     def analyze(self) -> MessageAnalysisResult:
         response = self.client.chat.completions.create(
             model='openai/gpt-oss-120b',
             messages=[
-                {
-                    'role': 'system',
-                    'content': SYSTEM_PROMPT
-                },
-                {
-                    'role': 'user',
-                    'content': self.message
-                }
+                {'role': 'system', 'content': SYSTEM_PROMPT},
+                {'role': 'user', 'content': self.message}
             ],
-            response_format={
-                'type': 'json_object'
-            },
+            response_format={'type': 'json_object'},
             temperature=0,
             max_tokens=1500
         )
@@ -67,21 +66,15 @@ class LanguageAnalyzer:
             detected = signal_data.get('detected', False)
             evidence = signal_data.get('evidence', [])
 
-            # Retain only exact snippets from the original message
             evidence = [
                 snippet
                 for snippet in evidence
-                if isinstance(snippet, str)
-                and snippet in self.message
+                if isinstance(snippet, str) and snippet in self.message
             ]
 
             detected = bool(detected and evidence)
 
-            setattr(
-                self.result,
-                signal,
-                (detected, evidence)
-            )
+            setattr(self.result, signal, (detected, evidence))
 
     def _store_claimed_brand(self, data: dict):
         brand = data.get('claimed_brand')
