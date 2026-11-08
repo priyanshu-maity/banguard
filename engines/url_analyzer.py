@@ -14,96 +14,30 @@ from confusable_homoglyphs import confusables
 
 @dataclass
 class URLAnalysisResult:
-    # URL information
-    normalized_url: str = None
-    domain: str = None
-    subdomain: str | None = None
-    registered_domain: str | None = None
-    public_suffix: str | None = None
+    from dataclasses import dataclass, field
 
-    scheme: str | None = None
-    port: int | None = None
+    @dataclass
+    class URLAnalysisResult:
+        # URL security signals
+        has_userinfo: tuple[bool, list[str]] = field(default_factory=lambda: (False, []))
+        uses_ip_address: tuple[bool, str | None] = (False, None)
 
-    path: str | None = None
-    params: str | None = None
-    query: str | None = None
-    fragment: str | None = None
+        # Domain structure
+        excessive_hyphens: tuple[bool, int] = (False, 0)
+        excessive_subdomains: tuple[bool, int] = (False, 0)
 
-    decoded_path: str | None = None
-    decoded_query: str | None = None
-    decoded_fragment: str | None = None
+        # Typosquatting
+        typosquatting_detected: tuple[bool, list[str]] = field(default_factory=lambda: (False, []))
 
-    has_userinfo: bool = False
+        # Homograph detection
+        uses_punycode: tuple[bool, list[str]] = field(default_factory=lambda: (False, []))
+        mixed_unicode_scripts: tuple[bool, list[str]] = field(default_factory=lambda: (False, []))
 
-    # Domain characteristics
-    unusually_long_domain: bool = False
-    excessive_hyphens: bool = False
-    high_digit_count: bool = False
-    uses_ip_address: bool = False
+        # Brand placement
+        brand_in_subdomain: tuple[bool, list[str]] = field(default_factory=lambda: (False, []))
 
-    # Domain structure
-    subdomain_count: int = 0
-    hyphen_count: int = 0
-    digit_count: int = 0
-    domain_length: int = 0
-
-    # Typosquatting
-    typosquatting_detected: bool = False
-    typosquatting_brands: list[str] = field(default_factory=list)
-    generated_variant_match: bool = False
-
-    # Homograph detection
-    uses_punycode: bool = False
-    mixed_unicode_scripts: bool = False
-    unicode_scripts: list[str] = field(default_factory=list)
-    confusable_characters_detected: bool = False
-    unicode_domain: str | None = None
-
-    # Brand placement
-    brand_in_subdomain: bool = False
-    brand_in_path: bool = False
-    brands_in_subdomain: list[str] = field(default_factory=list)
-    brands_in_path: list[str] = field(default_factory=list)
-
-    # Suspicious naming patterns
-    suspicious_keywords: list[str] = field(default_factory=list)
-    high_risk_tld: bool = False
-    unusual_port: bool = False
-
-    # Domain entropy
-    domain_entropy: float = 0.0
-    high_domain_entropy: bool = False
-
-    # DNS information
-    ip_addresses: list[str] = field(default_factory=list)
-    dns_records: list[str] = field(default_factory=list)
-    dns_ttls: dict[str, list[int]] = field(default_factory=dict)
-
-    missing_mx_record: bool = False
-    low_dns_ttl: bool = False
-    unusual_nameservers: list[str] = field(default_factory=list)
-
-    non_public_ip_resolution: bool = False
-    dns_resolution_failed: bool = False
-
-    # Domain registration information
-    domain_age_days: int | None = None
-    registrar: str | None = None
-    creation_date: str | None = None
-    expiration_date: str | None = None
-
-    # IP intelligence
-    ip_intelligence: list[dict] = field(default_factory=list)
-
-    # Redirect characteristics
-    redirect_chain: list[str] = field(default_factory=list)
-    final_url: str | None = None
-    redirect_loop_detected: bool = False
-    cross_domain_redirect: bool = False
-
-    # Threat intelligence
-    threat_matches: list[dict] = field(default_factory=list)
-    threat_intelligence_match: bool = False
+        # Suspicious keywords
+        suspicious_keywords: tuple[bool, list[str]] = field(default_factory=lambda: (False, []))
 
 
 class URLAnalyzer:
@@ -125,7 +59,6 @@ class URLAnalyzer:
 
     def analyze(self) -> URLAnalysisResult:
         self._normalize_url()
-        self._inspect_url()
         self._inspect_domain()
         self._check_dns()
         self._inspect_redirects()
@@ -211,39 +144,6 @@ class URLAnalyzer:
         )
 
         self.scheme = parsed.scheme.lower()
-
-    def _inspect_url(self):
-        parsed = urlparse(self.result.normalized_url)
-
-        self.result.path = parsed.path
-        self.result.params = parsed.params
-        self.result.query = parsed.query
-        self.result.fragment = parsed.fragment
-
-        # Decode each component exactly once for analysis
-        self.result.decoded_path = unquote(parsed.path)
-        self.result.decoded_query = unquote(parsed.query)
-        self.result.decoded_fragment = unquote(parsed.fragment)
-
-        # Extract domain components using the Public Suffix List
-        try:
-            ipaddress.ip_address(self.result.domain)
-            return
-
-        except ValueError:
-            pass
-
-        extracted = self.TLD_EXTRACTOR(
-            self.result.domain
-        )
-
-        self.result.subdomain = extracted.subdomain or None
-
-        self.result.registered_domain = (
-            extracted.top_domain_under_public_suffix or None
-        )
-
-        self.result.public_suffix = extracted.suffix or None
 
     def _inspect_domain(self):
         domain = self.result.domain
