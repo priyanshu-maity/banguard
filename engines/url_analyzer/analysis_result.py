@@ -23,3 +23,8 @@ class URLAnalysisResult:
 
     # Suspicious keywords
     suspicious_keywords: tuple[bool, list[str]] = field(default_factory=lambda: (False, []))
+
+    # DNS analysis
+    newly_registered_domain: tuple[bool | None, int | None] = (None, None)
+    missing_a_record: tuple[bool | None, str | None] = (None, None)
+    missing_mx_on_impersonating_domain: tuple[bool | None, str | None] = (None, None)
