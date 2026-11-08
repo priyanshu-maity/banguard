@@ -1,3 +1,4 @@
+
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,46 +35,23 @@ def initialize_database():
                 content_hash TEXT NOT NULL,
                 registered_at TEXT NOT NULL,
                 blockchain_tx_hash TEXT,
-
                 PRIMARY KEY (report_id, version),
-
-                FOREIGN KEY (report_id)
-                    REFERENCES assessment_reports(report_id)
-                    ON DELETE CASCADE
+                FOREIGN KEY (report_id) REFERENCES assessment_reports(report_id) ON DELETE CASCADE
             )
         """)
 
 
-def save_report_version(
-    report_id: str,
-    investigation_id: str,
-    report_created_at: str,
-    report_json: str,
-    content_hash: str,
-) -> int:
+def save_report_version(report_id: str, investigation_id: str, report_created_at: str, report_json: str, content_hash: str) -> int:
     """Save a report or create a new version if its content changes."""
 
     initialize_database()
 
     with _get_connection() as connection:
-        existing = connection.execute("""
-            SELECT investigation_id, current_version
-            FROM assessment_reports
-            WHERE report_id = ?
-        """, (report_id,)).fetchone()
+        existing = connection.execute("SELECT investigation_id, current_version FROM assessment_reports WHERE report_id = ?", (report_id,)).fetchone()
 
         if existing is None:
-            connection.execute("""
-                INSERT INTO assessment_reports (
-                    report_id,
-                    investigation_id,
-                    created_at
-                )
-                VALUES (?, ?, ?)
-            """, (report_id, investigation_id, report_created_at))
-
+            connection.execute("INSERT INTO assessment_reports (report_id, investigation_id, created_at) VALUES (?, ?, ?)", (report_id, investigation_id, report_created_at))
             current_version = 0
-
         else:
             if existing["investigation_id"] != investigation_id:
                 raise ValueError("Report ID already belongs to another investigation.")
@@ -81,39 +59,15 @@ def save_report_version(
             current_version = existing["current_version"]
 
             if current_version > 0:
-                latest = connection.execute("""
-                    SELECT content_hash
-                    FROM report_versions
-                    WHERE report_id = ? AND version = ?
-                """, (report_id, current_version)).fetchone()
+                latest = connection.execute("SELECT content_hash FROM report_versions WHERE report_id = ? AND version = ?", (report_id, current_version)).fetchone()
 
                 if latest["content_hash"] == content_hash:
                     return current_version
 
         new_version = current_version + 1
 
-        connection.execute("""
-            INSERT INTO report_versions (
-                report_id,
-                version,
-                report_json,
-                content_hash,
-                registered_at
-            )
-            VALUES (?, ?, ?, ?, ?)
-        """, (
-            report_id,
-            new_version,
-            report_json,
-            content_hash,
-            datetime.now(timezone.utc).isoformat(),
-        ))
-
-        connection.execute("""
-            UPDATE assessment_reports
-            SET current_version = ?
-            WHERE report_id = ?
-        """, (new_version, report_id))
+        connection.execute("INSERT INTO report_versions (report_id, version, report_json, content_hash, registered_at) VALUES (?, ?, ?, ?, ?)", (report_id, new_version, report_json, content_hash, datetime.now(timezone.utc).isoformat()))
+        connection.execute("UPDATE assessment_reports SET current_version = ? WHERE report_id = ?", (new_version, report_id))
 
         return new_version
 
@@ -128,17 +82,20 @@ def get_report_version(report_id: str, version: int | None = None) -> dict | Non
             row = connection.execute("""
                 SELECT rv.*
                 FROM report_versions rv
-                JOIN assessment_reports ar
-                    ON rv.report_id = ar.report_id
-                WHERE rv.report_id = ?
-                AND rv.version = ar.current_version
+                JOIN assessment_reports ar ON rv.report_id = ar.report_id
+                WHERE rv.report_id = ? AND rv.version = ar.current_version
             """, (report_id,)).fetchone()
         else:
-            row = connection.execute("""
-                SELECT *
-                FROM report_versions
-                WHERE report_id = ? AND version = ?
-            """, (report_id, version)).fetchone()
+            row = connection.execute("SELECT * FROM report_versions WHERE report_id = ? AND version = ?", (report_id, version)).fetchone()
 
         return dict(row) if row else None
 
+
+def update_blockchain_tx_hash(report_id: str, version: int, transaction_hash: str):
+    """Store the blockchain transaction hash for a registered version."""
+
+    with _get_connection() as connection:
+        cursor = connection.execute("UPDATE report_versions SET blockchain_tx_hash = ? WHERE report_id = ? AND version = ?", (transaction_hash, report_id, version))
+
+        if cursor.rowcount == 0:
+            raise ValueError("Report version does not exist.")
