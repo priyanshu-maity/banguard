@@ -197,6 +197,7 @@ dependencies = [
     { name = "python-dotenv" },
     { name = "python-whois" },
     { name = "rapidfuzz" },
+    { name = "requests" },
     { name = "tldextract" },
     { name = "web3" },
 ]
@@ -219,6 +220,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.2.4" },
     { name = "python-whois", specifier = ">=0.9.6" },
     { name = "rapidfuzz", specifier = ">=3.14.6" },
+    { name = "requests", specifier = ">=2.34.2" },
     { name = "tldextract", specifier = ">=5.4.0" },
     { name = "web3", specifier = ">=8.0.0" },
 ]
