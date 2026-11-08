@@ -90,7 +90,8 @@ def extract_indicators(investigation_id: str, original_url: str, m1_result=None,
         if m1.uses_ip_address[0]:
             _add_ip(indicators, m1.uses_ip_address[1], investigation_id,"M1",)
 
-        for url in m1.redirect_chain[1]:
+        for value in m1.redirect_chain[1]:
+            url = value.split(" -> ", 1)[-1] if " -> " in value else value
             _add_url(indicators, url, investigation_id, "M1")
 
         for domain in m1.cross_domain_redirect[1]:
@@ -104,13 +105,14 @@ def extract_indicators(investigation_id: str, original_url: str, m1_result=None,
                 _add_indicator(indicators, IndicatorType.DOMAIN, normalized_domain, investigation_id, "M1",)
 
         for value in m1.ssrf_attempt_detected[1]:
+            hostname = value.split(" -> ", 1)[0].strip()
             try:
-                ipaddress.ip_address(value.strip())
-                _add_ip(indicators, value, investigation_id, "M1")
+                ipaddress.ip_address(hostname)
+                continue
             except ValueError:
-                normalized_domain = _normalize_domain(value)
+                normalized_domain = _normalize_domain(hostname)
                 if normalized_domain:
-                    _add_indicator(indicators, IndicatorType.DOMAIN, normalized_domain, investigation_id, "M1",)
+                    _add_indicator(indicators, IndicatorType.DOMAIN, normalized_domain, investigation_id, "M1")
 
     # M3: Message analysis
     if m3 is not None:

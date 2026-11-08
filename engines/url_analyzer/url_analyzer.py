@@ -1,10 +1,10 @@
 from urllib.parse import urlparse
 
 from .analysis_result import URLAnalysisResult
-from url_normalizer import URLNormalizer
-from domain_inspector import DomainInspector
-from dns_analyzer import DNSAnalyzer
-from redirect_analyzer import RedirectAnalyzer
+from .url_normalizer import URLNormalizer
+from .domain_inspector import DomainInspector
+from .dns_analyzer import DNSAnalyzer
+from .redirect_analyzer import RedirectAnalyzer
 
 
 class URLAnalyzer:
