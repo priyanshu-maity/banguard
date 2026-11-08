@@ -36,10 +36,8 @@ def _normalize_domain(domain: str) -> str | None:
     """Normalize a domain name for exact comparison."""
     try:
         domain = domain.strip().rstrip(".").lower()
-
         if not domain:
             return None
-
         return domain.encode("idna").decode("ascii")
 
     except (UnicodeError, AttributeError):
@@ -54,15 +52,30 @@ def _add_indicator(indicators: dict, indicator_type: IndicatorType, value: str, 
     key = (indicator_type, value)
 
     if key not in indicators:
-        indicators[key] = SharedIndicator(
-            indicator_type=indicator_type,
-            value=value,
-        )
+        indicators[key] = SharedIndicator(indicator_type=indicator_type, value=value,)
 
-    source = IndicatorSource(
-        investigation_id=investigation_id,
-        module=module,
-    )
+    source = IndicatorSource(investigation_id=investigation_id, module=module,)
 
     if source not in indicators[key].sources:
         indicators[key].sources.append(source)
+
+def _add_url(indicators: dict, url: str, investigation_id: str, module: str,):
+    """Add a URL and its corresponding domain."""
+    normalized_url, domain = _normalize_url(url)
+
+    if normalized_url is None:
+        return
+
+    _add_indicator(indicators, IndicatorType.URL, normalized_url, investigation_id, module,)
+
+    if domain:
+        _add_indicator(indicators, IndicatorType.DOMAIN, domain, investigation_id, module,)
+
+def _add_ip(indicators: dict, value: str, investigation_id: str, module: str,):
+    """Add an IP address in its canonical format."""
+    try:
+        normalized_ip = str(ipaddress.ip_address(value.strip()))
+    except ValueError:
+        return
+
+    _add_indicator(indicators, IndicatorType.IP_ADDRESS, normalized_ip, investigation_id, module,)
