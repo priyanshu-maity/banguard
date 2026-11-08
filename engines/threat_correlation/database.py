@@ -52,5 +52,27 @@ def initialize_database():
             ON indicators (indicator_type, value)
         """)
 
+def find_matching_investigations(indicators: list[SharedIndicator], exclude_investigation_id: str | None = None,) -> list[dict]:
+    """Find previous investigations containing the supplied indicators."""
 
+    initialize_database()
+    matches = []
 
+    with _get_connection() as connection:
+        for indicator in indicators:
+            query = """
+                SELECT investigation_id, indicator_type, value, source_module
+                FROM indicators
+                WHERE indicator_type = ?
+                AND value = ?
+            """
+            parameters = [ indicator.indicator_type.value, indicator.value,]
+
+            if exclude_investigation_id is not None:
+                query += " AND investigation_id != ?"
+                parameters.append(exclude_investigation_id)
+
+            rows = connection.execute(query, parameters,).fetchall()
+            matches.extend(dict(row) for row in rows)
+
+    return matches
