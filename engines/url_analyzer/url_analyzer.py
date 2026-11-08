@@ -4,12 +4,12 @@ from analysis_result import URLAnalysisResult
 from url_normalizer import URLNormalizer
 from domain_inspector import DomainInspector
 from dns_analyzer import DNSAnalyzer
+from redirect_analyzer import RedirectAnalyzer
 
 
 class URLAnalyzer:
-    def __init__(self, url: str, threat_intel_lookup=None):
+    def __init__(self, url: str):
         self.url = url
-        self.threat_intel_lookup = threat_intel_lookup
 
         self.normalized_url = None
         self.scheme = None
@@ -26,7 +26,6 @@ class URLAnalyzer:
         self._inspect_domain()
         self._check_dns()
         self._inspect_redirects()
-        self._check_threat_intelligence()
 
         return self.result
 
@@ -61,7 +60,5 @@ class URLAnalyzer:
         analyzer.analyze()
 
     def _inspect_redirects(self):
-        ...
-
-    def _check_threat_intelligence(self):
-        ...
+        analyzer = RedirectAnalyzer(self.normalized_url, self.result)
+        analyzer.analyze()
