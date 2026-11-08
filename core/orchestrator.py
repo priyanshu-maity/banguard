@@ -39,3 +39,22 @@ def _collect_urls(original_url: str, m1_data, normalized_url: str | None) -> lis
             continue
 
     return urls
+
+def _run_tls_analysis(url: str, investigation_id: str) -> AnalysisResult:
+    try:
+        parsed = urlsplit(url)
+        if parsed.scheme.lower() != "https":
+            return AnalysisResult(investigation_id=investigation_id, module="M2", status=AnalysisStatus.SKIPPED, error="TLS analysis is not applicable to HTTP URLs.")
+
+        host = parsed.hostname
+        port = parsed.port or 443
+
+        if not host:
+            raise ValueError("URL does not contain a valid hostname.")
+        tls_data = TLSAnalyzer(host, port).analyze()
+
+        return AnalysisResult(investigation_id=investigation_id, module="M2", status=AnalysisStatus.COMPLETED, data=tls_data)
+    except Exception as error:
+        return AnalysisResult(investigation_id=investigation_id, module="M2", status=AnalysisStatus.FAILED, error=str(error))
+
+
