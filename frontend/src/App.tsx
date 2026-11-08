@@ -119,7 +119,20 @@ export default function App() {
         <div className="samples"><span>Try</span>{SAMPLES.map(([n, v]) => <button key={n} className="chip" onClick={() => { setKind(v.startsWith('http') ? 'url' : 'message'); setText(v) }}>{n}</button>)}</div>
       </aside>
       <main>
-        {step >= 0 && <ol className="steps">{STEPS.map((s, i) => <li key={s} className={i < step ? 'done' : i === step ? 'now' : ''}>{s}</li>)}</ol>}
+        {step >= 0 && (
+          <section className="proc" aria-live="polite" aria-busy="true">
+            <header><h2>Investigating</h2><code title={text}>{text.length > 70 ? text.slice(0, 70) + '…' : text}</code></header>
+            <ol>{STEPS.map((s, i) => (
+              <li key={s} className={i < step ? 'done' : i === step ? 'now' : ''}>
+                <span className="ico" aria-hidden="true">{i < step ? '✓' : ''}</span>
+                <span className="lbl">{s}</span>
+                {i === step && <span className="dots" aria-hidden="true"><i /><i /><i /></span>}
+                {i < step && <small>done</small>}
+              </li>
+            ))}</ol>
+            <div className="prog"><div style={{ width: ((step + 1) / STEPS.length) * 100 + '%' }} /></div>
+          </section>
+        )}
         {!res && step < 0 && <div className="empty"><div className="strip big"><div className="bar" /></div><h2>Is it safe?</h2><p className="dim">Submit a link or message. You get a verdict, the evidence behind it, and what we could not check.</p></div>}
         {res && step < 0 && <Dossier a={res} />}
       </main>
