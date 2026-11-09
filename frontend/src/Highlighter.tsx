@@ -1,16 +1,34 @@
 import type { ReactNode, SyntheticEvent } from 'react'
-import type { Finding, Indicator } from './api'
+import type { Evidence, Indicator } from './api'
 
-type Mark = { needle: string; title: string; reason: string; sev: 'high' | 'medium' | 'low'; kind: 'phrase' | 'indicator' }
+type Sev = 'high' | 'medium' | 'low'
+type Mark = { needle: string; title: string; reason: string; sev: Sev; kind: 'phrase' | 'indicator' }
 
 const MOD: Record<string, string> = { M1: 'URL analysis', M2: 'Certificate', M3: 'Message analysis', M4: 'Correlation', M5: 'Site security' }
 const mod = (s: string) => s.split(',').map(x => MOD[x.trim()] ?? x.trim()).join(', ')
 
-const norm = (s: string): Mark['sev'] => {
-  const v = s.toLowerCase()
-  return v === 'high' || v === 'critical' ? 'high' : v === 'medium' ? 'medium' : 'low'
-}
 const rank = { high: 3, medium: 2, low: 1 }
+const LABEL: Record<Sev, string> = { high: 'strong', medium: 'moderate', low: 'mild' }
+
+// Evidence entries look like:  [high] Request for credentials or sensitive data: ["share OTP"]
+// (source_module M3, reference "message"). The [severity] prefix is written by _build_evidence in the backend.
+function phraseMarks(evidence: Evidence[]): Mark[] {
+  const out: Mark[] = []
+  evidence.filter(e => e.source_module === 'M3' && e.reference === 'message').forEach(e => {
+    const m = e.description.match(/^\[(critical|high|medium|low|info)\]\s+([^:]+):\s*(.*)$/s)
+    if (!m) return
+    const level = m[1], title = m[2]
+    const sev: Sev = level === 'high' || level === 'critical' ? 'high' : level === 'medium' ? 'medium' : 'low'
+    let detail: unknown
+    try { detail = JSON.parse(m[3]) } catch { return }
+    const needles = (Array.isArray(detail) ? detail : [detail]).filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+    needles.forEach(needle => out.push({
+      needle: needle.trim(), title, sev, kind: 'phrase',
+      reason: `Marked as a ${LABEL[sev]} signal by message analysis. Wording alone is not proof of fraud.`,
+    }))
+  })
+  return out
+}
 
 // Tooltips are position:fixed so the scrollable message box cannot clip them.
 const place = (e: SyntheticEvent<HTMLElement>) => {
@@ -22,17 +40,8 @@ const place = (e: SyntheticEvent<HTMLElement>) => {
   tip.style.top = (r.bottom + 8 + h > innerHeight ? Math.max(8, r.top - h - 8) : r.bottom + 8) + 'px'
 }
 
-export default function Highlighter({ text, findings, indicators }: { text: string; findings: Finding[]; indicators: Indicator[] }) {
-  const marks: Mark[] = []
-
-  // M3 findings carry their exact snippets after "Evidence:", separated by "; ".
-  findings.filter(f => f.source_module === 'M3').forEach(f => {
-    const i = f.description.indexOf('Evidence:')
-    if (i < 0) return
-    const reason = f.description.slice(0, i).trim()
-    f.description.slice(i + 9).split('; ').map(s => s.trim()).filter(s => s && !s.startsWith('No exact evidence'))
-      .forEach(needle => marks.push({ needle, title: f.title, reason, sev: norm(f.severity), kind: 'phrase' }))
-  })
+export default function Highlighter({ text, evidence, indicators }: { text: string; evidence: Evidence[]; indicators: Indicator[] }) {
+  const marks: Mark[] = phraseMarks(evidence)
 
   indicators.forEach(x => marks.push({
     needle: x.value,

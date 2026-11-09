@@ -8,16 +8,12 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 from uuid import uuid4
+from dotenv import load_dotenv
 
 from core.schema import ReportEvidence, ReportFinding, ReportIndicator, RiskLevel, ThreatReport
 from engines.threat_correlation.indicator_extractor import extract_indicators
 
-try:  # optional: load GROQ_API_KEY from .env
-    from dotenv import load_dotenv
-
-    load_dotenv()
-except ImportError:  # pragma: no cover
-    pass
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -822,7 +818,7 @@ def _build_evidence(output: AssessmentEvidence, signals: list[Signal], guardrail
             add("M4", f"Historical correlation: shares {shared} with earlier investigation {s.detail.get('related_investigation', '?')}", s.scope)
             continue
         detail = "" if _is_empty(s.detail) else f": {json.dumps(s.detail, ensure_ascii=False)}"
-        add(s.spec.module, f"{s.spec.title}{detail}", s.scope)
+        add(s.spec.module, f"[{s.spec.severity}] {s.spec.title}{detail}", s.scope)
     for line in output.authoritative_evidence:
         add("ASSESSMENT", f"Authoritative evidence: {line}")
     for note in guardrail_notes:
