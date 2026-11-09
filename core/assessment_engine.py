@@ -1,151 +1,25 @@
-
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from core.schema import (
-    RiskLevel,
-    ReportFinding,
-    ReportIndicator,
-    ReportEvidence,
-    ThreatReport,
-)
-
+from core.schema import RiskLevel, ReportFinding, ReportIndicator, ReportEvidence, ThreatReport
 from engines.threat_correlation.indicator_extractor import extract_indicators
+from core.risk_model import ActiveSignal, RiskModel, RiskModelConfig, RiskScore
+from core.signal_catalog import (
+    INTERACTIONS, M1_SIGNALS, M2_SIGNALS, M3_SIGNALS, M5_SIGNALS, SignalSpec, severity_from_lr,
+)
+from core.signal_reader import format_detail, read_signals
 
+logger = logging.getLogger(__name__)
 
-# ============================================================
-# CONFIGURATION
-# ============================================================
+MODEL = RiskModel(RiskModelConfig())
+CONFIRMED_VT_MIN_ENGINES = 3  # malicious detections needed to call a URL Confirmed Malicious
+MIN_COVERAGE = 0.60  # below this, a low-risk result is reported as Inconclusive
 
-SEVERITY_WEIGHTS = {
-    'informational': 0,
-    'low': 5,
-    'medium': 12,
-    'high': 20,
-    'critical': 30,
-}
+_SPECS = {(s.module, s.name): s for s in M1_SIGNALS + M2_SIGNALS + M3_SIGNALS + M5_SIGNALS}
+_M4_LR_BY_SEVERITY = {"high": 4.0, "medium": 2.5, "low": 1.3}
 
-RISK_THRESHOLDS = {
-    'low': 20,
-    'suspicious': 40,
-}
-
-CONFIRMED_VT_MIN_ENGINES = 3
-MIN_COVERAGE = 0.60
-
-
-# Module signals and their severity.
-# False values are ignored.
-# M5 security header findings are reported but do not affect
-# the maliciousness score.
-
-SIGNALS = {
-    'M1': {
-        'has_userinfo': 'medium',
-        'uses_ip_address': 'medium',
-        'excessive_hyphens': 'low',
-        'excessive_subdomains': 'low',
-        'suspicious_keywords': 'low',
-        'typosquatting_detected': 'high',
-        'uses_punycode': 'medium',
-        'mixed_unicode_scripts': 'high',
-        'brand_in_subdomain': 'high',
-        'newly_registered_domain': 'medium',
-        'missing_a_record': 'low',
-        'missing_mx_on_impersonating_domain': 'medium',
-        'cross_domain_redirect': 'low',
-        'url_shortener_detected': 'low',
-        'ssrf_attempt_detected': 'high',
-        'virustotal_malicious': 'high',
-        'virustotal_suspicious': 'medium',
-    },
-    'M2': {
-        'distrusted_ca_match': 'high',
-        'hostname_mismatch': 'medium',
-        'self_signed': 'low',
-        'unknown_issuer': 'low',
-        'certificate_expired': 'low',
-        'certificate_not_yet_valid': 'low',
-        'newly_issued_certificate': 'low',
-    },
-    'M3': {
-        'urgency': 'low',
-        'fear_or_threat': 'low',
-        'authority_impersonation': 'medium',
-        'financial_manipulation': 'low',
-        'credential_requests': 'medium',
-        'reward_or_prize_lure': 'low',
-        'secrecy_or_isolation': 'low',
-        'brand_impersonation': 'medium',
-    },
-    'M5': {
-        'served_over_http': 'high',
-        'missing_hsts': 'medium',
-        'missing_csp': 'medium',
-        'missing_content_type_options': 'low',
-        'missing_framing_protection': 'medium',
-        'missing_referrer_policy': 'low',
-        'missing_permissions_policy': 'low',
-    },
-}
-
-SIGNAL_TITLES = {
-    'has_userinfo': 'Credentials embedded in URL',
-    'uses_ip_address': 'Hostname is an IP address',
-    'excessive_hyphens': 'Excessive hyphens in domain',
-    'excessive_subdomains': 'Excessive subdomains',
-    'suspicious_keywords': 'Suspicious keywords in URL',
-    'typosquatting_detected': 'Potential typosquatting detected',
-    'uses_punycode': 'Punycode detected',
-    'mixed_unicode_scripts': 'Mixed Unicode scripts detected',
-    'brand_in_subdomain': 'Brand name found in subdomain',
-    'newly_registered_domain': 'Newly registered domain',
-    'missing_a_record': 'Domain has no A record',
-    'missing_mx_on_impersonating_domain': 'Impersonating domain has no MX record',
-    'cross_domain_redirect': 'Cross domain redirect detected',
-    'url_shortener_detected': 'URL shortener detected',
-    'ssrf_attempt_detected': 'Unsafe redirect destination detected',
-    'virustotal_malicious': 'Flagged malicious by VirusTotal',
-    'virustotal_suspicious': 'Flagged suspicious by VirusTotal',
-    'distrusted_ca_match': 'Certificate issued by a distrusted CA',
-    'hostname_mismatch': 'Certificate hostname mismatch',
-    'self_signed': 'Self signed certificate',
-    'unknown_issuer': 'Untrusted certificate issuer',
-    'certificate_expired': 'TLS certificate expired',
-    'certificate_not_yet_valid': 'TLS certificate not yet valid',
-    'newly_issued_certificate': 'Recently issued TLS certificate',
-    'urgency': 'Urgency language detected',
-    'fear_or_threat': 'Fear or threat language detected',
-    'authority_impersonation': 'Authority impersonation indicator',
-    'financial_manipulation': 'Financial manipulation indicator',
-    'credential_requests': 'Credential request detected',
-    'reward_or_prize_lure': 'Reward or prize lure detected',
-    'secrecy_or_isolation': 'Secrecy or isolation language detected',
-    'brand_impersonation': 'Brand impersonation indicator',
-    'served_over_http': 'Website served over unencrypted HTTP',
-    'missing_hsts': 'Missing or ineffective HSTS',
-    'missing_csp': 'Missing Content Security Policy',
-    'missing_content_type_options': 'Missing X Content Type Options',
-    'missing_framing_protection': 'Missing clickjacking protection',
-    'missing_referrer_policy': 'Missing or unsafe Referrer Policy',
-    'missing_permissions_policy': 'Missing Permissions Policy',
-}
-
-SIGNAL_IMPACTS = {
-    'typosquatting_detected': 'The domain resembles a known brand and may be used for impersonation.',
-    'mixed_unicode_scripts': 'Mixing writing systems can make a malicious domain appear legitimate.',
-    'brand_in_subdomain': 'Attackers can use brand names in subdomains to mislead visitors.',
-    'newly_registered_domain': 'Phishing domains are often registered shortly before campaigns.',
-    'virustotal_malicious': 'Security vendors have identified this URL as potentially malicious.',
-    'credential_requests': 'Requests for passwords, PINs or OTPs are common phishing tactics.',
-    'served_over_http': 'Traffic can be intercepted or modified in transit.',
-}
-
-
-# ============================================================
-# DATA STRUCTURE
-# ============================================================
 
 @dataclass
 class AssessmentEvidence:
@@ -153,539 +27,309 @@ class AssessmentEvidence:
     indicators: list[ReportIndicator] = field(default_factory=list)
     evidence: list[ReportEvidence] = field(default_factory=list)
     module_statuses: dict[str, str] = field(default_factory=dict)
-
-    investigation_type: str = 'url'
+    investigation_type: str = "url"
     risk_level: RiskLevel | None = None
-    risk_score: int = 0
+    risk_score: RiskScore | None = None
     coverage: float = 0.0
     authoritative_evidence: list[str] = field(default_factory=list)
 
 
-# ============================================================
-# RESULT HELPERS
-# ============================================================
-
+# Result helpers
 def _unwrap(result):
-    return getattr(result, 'data', None) if result is not None else None
+    return getattr(result, "data", None) if result is not None else None
 
 
 def _result_items(results):
+    """Normalise single, multiple, or reference-keyed module results into (reference, result) pairs."""
     if results is None:
         return []
-
     if isinstance(results, dict):
         return list(results.items())
-
     if isinstance(results, (list, tuple)):
         return [(None, result) for result in results]
-
     return [(None, results)]
 
 
-def _status_of(result):
+def _status_of(result) -> str:
     if result is None:
-        return 'not_provided'
-
-    status = getattr(result, 'status', None)
-
-    if status is None:
-        return 'unknown'
-
-    return str(getattr(status, 'value', status)).lower()
+        return "not_provided"
+    value = getattr(result, "status", None)
+    return getattr(value, "value", str(value)) if value is not None else "unknown"
 
 
-def _severity_text(severity):
-    return str(getattr(severity, 'value', severity)).lower()
+def _record_result_statuses(output, module, results, not_applicable_if_empty=False):
+    items = _result_items(results)
+    if not items:
+        output.module_statuses[module] = "not_applicable" if not_applicable_if_empty else "not_provided"
+        return
+    for reference, result in items:
+        key = f"{module}:{reference}" if reference else module
+        output.module_statuses[key] = _status_of(result)
 
 
-def _extract_flag_detail(value):
-    """
-    Supports:
-        True
-        False
-        (True, detail)
-        (False, detail)
-
-    A signal is active only when its flag is True.
-    """
-    if isinstance(value, tuple):
-        flag = value[0] if value else None
-        detail = value[1] if len(value) > 1 else None
-        return flag is True, detail
-
-    if isinstance(value, bool):
-        return value, None
-
-    return False, None
+def _severity_text(severity) -> str:
+    return str(getattr(severity, "value", severity)).lower()
 
 
-def _format_detail(detail):
-    if detail is None:
-        return 'Detected'
-
-    if isinstance(detail, (list, tuple, set)):
-        return ', '.join(str(item) for item in detail) or 'Detected'
-
-    return str(detail)
-
-
-# ============================================================
-# SIGNAL COLLECTION
-# ============================================================
-
-def _collect_signals(module, result, reference=None):
-    data = _unwrap(result)
-
-    if data is None:
-        return []
-
-    signals = []
-
-    for name, severity in SIGNALS.get(module, {}).items():
-        value = getattr(data, name, None)
-        active, detail = _extract_flag_detail(value)
-
-        if not active:
-            continue
-
-        # Some signals store their supporting detail separately.
-        if module == 'M3' and name == 'brand_impersonation':
-            detail = getattr(data, 'impersonation_evidence', detail)
-
-        title = SIGNAL_TITLES.get(name, name.replace('_', ' ').title())
-
-        description = f'{title}.'
-
-        if detail is not None:
-            description += f' Evidence: {_format_detail(detail)}.'
-
-        finding = ReportFinding(
-            title=title,
-            description=description,
-            severity=severity,
-            source_module=module,
-            impact=SIGNAL_IMPACTS.get(
-                name,
-                'This indicator may contribute to suspicious activity.'
-            ),
-            remediation='Verify the destination or request through an official channel before proceeding.',
-        )
-
-        signals.append({
-            'module': module,
-            'name': name,
-            'severity': severity,
-            'weight': SEVERITY_WEIGHTS[severity],
-            'finding': finding,
-            'reference': reference,
-        })
-
-    return signals
-
-
-def _collect_all_signals(
-    m1_result,
-    m2_results,
-    m3_result,
-    m4_result,
-    m5_result,
-):
-    signals = []
-
+# Collection: signals -> findings
+def _gather_signals(m1_result, m2_results, m3_result, m4_result, m5_result) -> list[ActiveSignal]:
+    signals: list[ActiveSignal] = []
     for reference, result in _result_items(m1_result):
-        signals.extend(_collect_signals('M1', result, reference))
-
-    for reference, result in _result_items(m2_results):
-        signals.extend(_collect_signals('M2', result, reference))
-
-    for reference, result in _result_items(m3_result):
-        signals.extend(_collect_signals('M3', result, reference))
-
+        signals += read_signals(_unwrap(result), M1_SIGNALS, reference or "url")
     for reference, result in _result_items(m5_result):
-        signals.extend(_collect_signals('M5', result, reference))
-
+        signals += read_signals(_unwrap(result), M5_SIGNALS, reference or "url")  # same scope key as M1
+    for _, result in _result_items(m2_results):
+        signals += read_signals(_unwrap(result), M2_SIGNALS, "global")
+    signals += read_signals(_unwrap(m3_result), M3_SIGNALS, "message")
     return signals
 
 
-# ============================================================
-# CORRELATION FINDINGS
-# ============================================================
+def _finding_from_signal(signal: ActiveSignal) -> ReportFinding:
+    spec: SignalSpec = _SPECS[(signal.module, signal.name)]
+    return ReportFinding(
+        title=spec.title,
+        description=spec.evidence.format(detail=format_detail(signal.detail)),
+        severity=spec.severity or severity_from_lr(signal.lr),
+        source_module=signal.module,
+        impact=spec.impact,
+        remediation=spec.remediation,
+    )
 
-def _collect_correlation(output, result):
+
+def _collect_m4(output, result, signals):
+    """Correlation findings are passed through, and also scored as one evidence group."""
     data = _unwrap(result)
-
-    if data is None:
-        return 0
-
-    total_weight = 0
-
-    for finding in getattr(data, 'findings', []):
-        severity = _severity_text(
-            getattr(finding, 'severity', 'low')
-        )
-
-        weight = SEVERITY_WEIGHTS.get(severity, 5)
-        total_weight += weight
-
+    if not data:
+        return
+    for finding in getattr(data, "findings", []):
+        severity = _severity_text(getattr(finding, "severity", "low"))
         output.findings.append(ReportFinding(
-            title=getattr(finding, 'title', 'Correlation finding'),
-            description=getattr(finding, 'description', ''),
+            title=finding.title,
+            description=getattr(finding, "description", ""),
             severity=severity,
-            source_module='M4',
-            impact=getattr(finding, 'impact', ''),
-            remediation=getattr(finding, 'remediation', ''),
+            source_module="M4",
+            impact=getattr(finding, "impact", ""),
+            remediation=getattr(finding, "remediation", ""),
         ))
-
-    for item in getattr(data, 'evidence', []):
+        signals.append(ActiveSignal(f"m4:{finding.title}", "M4", "campaign_correlation",
+                                    _M4_LR_BY_SEVERITY.get(severity, 1.3), None, "global"))
+    for item in getattr(data, "evidence", []):
         output.evidence.append(item)
 
-    return total_weight
 
-
-# ============================================================
-# RISK SCORING
-# ============================================================
-
-def _calculate_score(signals, correlation_weight):
-    score = sum(signal['weight'] for signal in signals)
-
-    score += correlation_weight
-
-    return min(score, 100)
-
-
-def _authoritative_evidence(m1_result):
-    evidence = []
-
+def _authoritative_evidence(m1_result) -> list[str]:
+    """Evidence strong enough to call a URL Confirmed Malicious without the model."""
+    found = []
     for reference, result in _result_items(m1_result):
         data = _unwrap(result)
-
-        if data is None:
-            continue
-
-        value = getattr(data, 'virustotal_malicious', None)
-        active, detail = _extract_flag_detail(value)
-
-        if not active:
-            continue
-
-        count = detail if isinstance(detail, int) else None
-
-        if count is not None and count >= CONFIRMED_VT_MIN_ENGINES:
-            evidence.append(
-                f'{reference or "URL"}: flagged malicious by {count} VirusTotal engines'
-            )
-
-    return evidence
+        flag, count = (getattr(data, "virustotal_malicious", None) or (None, None))[:2] if data else (None, None)
+        if flag is True and isinstance(count, int) and count >= CONFIRMED_VT_MIN_ENGINES:
+            found.append(f"{reference or 'URL'}: flagged malicious by {count} VirusTotal engines")
+    return found
 
 
-def _calculate_coverage(
-    m1_result,
-    m2_results,
-    m3_result,
-    m5_result,
-    investigation_type,
-):
-    modules = {}
-
-    if investigation_type in ('url', 'combined'):
-        if m1_result:
-            modules['M1'] = m1_result
-
-        if m2_results:
-            modules['M2'] = m2_results
-
-        if m5_result:
-            modules['M5'] = m5_result
-
-    if investigation_type in ('message', 'combined'):
-        if m3_result:
-            modules['M3'] = m3_result
-
-    if not modules:
-        return 0.0
-
-    completed = 0
-    total = 0
-
-    for results in modules.values():
-        for _, result in _result_items(results):
-            total += 1
-
-            status = _status_of(result)
-
-            if status in ('completed', 'skipped'):
-                completed += 1
-            elif status == 'partial':
-                completed += 0.5
-
-    return completed / total if total else 0.0
+# Evidence coverage
+def _flag_of(value):
+    return value[0] if isinstance(value, tuple) and value else value if isinstance(value, bool) else None
 
 
-# ============================================================
-# EVIDENCE AND INDICATORS
-# ============================================================
+def _coverage(m1_result, m2_results, m3_result, m5_result, investigation_type) -> float:
+    """Weighted share of the expected checks that produced a usable result (0 to 1)."""
+    checks: list[tuple[float, float]] = []  # (weight, score)
 
-def _collect_evidence(output, m1_result, m5_result):
-    for reference, result in _result_items(m1_result):
-        data = _unwrap(result)
+    def completion(result) -> float:
+        status = _status_of(result)
+        return 1.0 if status == "completed" else 0.5 if status == "partial" else 0.0
 
-        if data is None:
-            continue
+    m1_items = _result_items(m1_result)
+    if m1_items:
+        m5_by_ref = dict(_result_items(m5_result))
+        structure, age, intel, page = [], [], [], []
+        for reference, result in m1_items:
+            data = _unwrap(result)
+            structure.append(completion(result))
+            age.append(1.0 if data is not None and (getattr(data, "newly_registered_domain", (None,)) or (None,))[0] is not None else 0.0)
+            providers = getattr(data, "threat_intelligence_provider_status", {}) if data is not None else {}
+            intel.append(1.0 if any(v in ("success", "no_report") for v in providers.values()) else 0.0)
+            page.append(completion(m5_by_ref.get(reference)))
+        mean = lambda values: sum(values) / len(values)
+        checks += [(3.0, mean(structure)), (2.0, mean(age)), (3.0, mean(intel)), (0.5, mean(page))]
 
-        redirect_chain = getattr(data, 'redirect_chain', None)
+        tls = [result for _, result in _result_items(m2_results) if _status_of(result) != "skipped"]
+        if tls:
+            checks.append((1.5, sum(completion(r) for r in tls) / len(tls)))
 
-        if redirect_chain:
-            output.evidence.append(ReportEvidence(
-                source_module='M1',
-                description=f'Redirect chain for {reference or "URL"}: {redirect_chain}',
-            ))
+    if investigation_type in ("message", "combined"):
+        # A message counts as covered only to the extent its language checks were actually evaluated.
+        data = _unwrap(m3_result)
+        names = [spec.name for spec in M3_SIGNALS if spec.name != "brand_impersonation"]
+        evaluated = [_flag_of(getattr(data, name, None)) is not None for name in names] if data is not None else []
+        fraction = sum(evaluated) / len(evaluated) if evaluated else 0.0
+        checks.append((3.0, completion(m3_result) * fraction))
 
-        providers = getattr(
-            data,
-            'threat_intelligence_provider_status',
-            None,
-        )
+    total = sum(weight for weight, _ in checks)
+    return sum(weight * score for weight, score in checks) / total if total else 0.0
 
-        if providers:
-            output.evidence.append(ReportEvidence(
-                source_module='M1',
-                description=f'Threat intelligence provider status: {providers}',
-            ))
 
-    for reference, result in _result_items(m5_result):
-        data = _unwrap(result)
+# Public API
+def collect_assessment_evidence(investigation_id, original_url="", m1_result=None, m2_results=None, m3_result=None,
+                                m4_result=None, m5_result=None, investigation_type="url") -> AssessmentEvidence:
+    """Turn module signals into findings, evidence, a risk score and a risk level."""
+    if investigation_type not in ("url", "message", "combined"):
+        raise ValueError("investigation_type must be 'url', 'message', or 'combined'.")
 
-        if data is None:
-            continue
+    output = AssessmentEvidence(investigation_type=investigation_type)
 
-        fetched = getattr(data, 'page_fetched', None)
+    # Statuses
+    url_expected = investigation_type == "url"
+    _record_result_statuses(output, "M1", m1_result, not_applicable_if_empty=not url_expected)
+    _record_result_statuses(output, "M2", m2_results, not_applicable_if_empty=True)
+    _record_result_statuses(output, "M5", m5_result, not_applicable_if_empty=not url_expected)
+    if investigation_type == "url":
+        output.module_statuses["M3"] = "not_applicable"
+    else:
+        output.module_statuses["M3"] = _status_of(m3_result)
+    output.module_statuses["M4"] = _status_of(m4_result)
 
-        if isinstance(fetched, tuple) and len(fetched) > 1 and fetched[0]:
-            output.evidence.append(ReportEvidence(
-                source_module='M5',
-                description=f'Final inspected URL: {fetched[1]}',
-            ))
+    # Signals, findings, scoring
+    signals = _gather_signals(m1_result, m2_results, m3_result, m4_result, m5_result)
+    for signal in signals:
+        output.findings.append(_finding_from_signal(signal))
+    _collect_m4(output, m4_result, signals)
 
-    for line in output.authoritative_evidence:
-        output.evidence.append(ReportEvidence(
-            source_module='ASSESSMENT',
-            description=f'Authoritative evidence: {line}',
+    score = MODEL.score(signals, INTERACTIONS)
+    output.risk_score = score
+    for fired in score.interactions:
+        output.findings.append(ReportFinding(
+            title=fired.title,
+            description=f"{fired.description} Signals involved: {', '.join(fired.members)}.",
+            severity="high",
+            source_module="ASSESSMENT",
+            impact="Combinations of indicators are much stronger evidence than any one of them alone.",
+            remediation="Do not interact with the link or message until it has been verified through an official channel.",
         ))
 
-    output.evidence.append(ReportEvidence(
-        source_module='ASSESSMENT',
-        description=f'Risk score: {output.risk_score}/100.',
-    ))
-
-    output.evidence.append(ReportEvidence(
-        source_module='ASSESSMENT',
-        description=f'Evidence coverage: {output.coverage:.0%}.',
-    ))
-
-
-def _collect_indicators(
-    output,
-    investigation_id,
-    original_url,
-    m1_result,
-    m3_result,
-    m5_result,
-):
-    try:
-        extracted = extract_indicators(
-            investigation_id=investigation_id,
-            original_url=original_url or '',
-            m1_result=[
-                result for _, result in _result_items(m1_result)
-            ],
-            m3_result=m3_result,
-            m5_result=[
-                result for _, result in _result_items(m5_result)
-            ],
-        )
-
-        for item in extracted:
-            for source in item.sources:
-                indicator_type = getattr(
-                    item.indicator_type,
-                    'value',
-                    item.indicator_type,
-                )
-
-                output.indicators.append(ReportIndicator(
-                    indicator_type=str(indicator_type),
-                    value=item.value,
-                    source_module=source.module,
-                ))
-
-    except Exception:
-        # Indicator extraction is supplementary.
-        # It should not prevent the threat report from being generated.
-        return
-
-
-# ============================================================
-# RISK CLASSIFICATION
-# ============================================================
-
-def _classify_score(score, coverage, authoritative_evidence):
-    if authoritative_evidence:
-        return RiskLevel.CONFIRMED_MALICIOUS
-
-    if score >= RISK_THRESHOLDS['suspicious']:
-        return RiskLevel.HIGH
-
-    if score >= RISK_THRESHOLDS['low']:
-        return RiskLevel.SUSPICIOUS
-
-    if coverage < MIN_COVERAGE:
-        return RiskLevel.INCONCLUSIVE
-
-    return RiskLevel.LOW
-
-
-def classify_risk(assessment):
-    return assessment.risk_level or RiskLevel.INCONCLUSIVE
-
-
-# ============================================================
-# PUBLIC ASSESSMENT FUNCTION
-# ============================================================
-
-def collect_assessment_evidence(
-    investigation_id,
-    original_url='',
-    m1_result=None,
-    m2_results=None,
-    m3_result=None,
-    m4_result=None,
-    m5_result=None,
-    investigation_type='url',
-):
-    if investigation_type not in ('url', 'message', 'combined'):
-        raise ValueError(
-            'investigation_type must be url, message, or combined.'
-        )
-
-    output = AssessmentEvidence(
-        investigation_type=investigation_type,
-    )
-
-    # Record module statuses.
-    for module, results in (
-        ('M1', m1_result),
-        ('M2', m2_results),
-        ('M3', m3_result),
-        ('M5', m5_result),
-        ('M4', m4_result),
-    ):
-        for reference, result in _result_items(results):
-            key = f'{module}:{reference}' if reference else module
-            output.module_statuses[key] = _status_of(result)
-
-        if not _result_items(results):
-            output.module_statuses[module] = 'not_provided'
-
-    # Collect findings and their severity weights.
-    signals = _collect_all_signals(
-        m1_result,
-        m2_results,
-        m3_result,
-        m4_result,
-        m5_result,
-    )
-
-    for signal in signals:
-        output.findings.append(signal['finding'])
-
-    # Include M4 correlation findings.
-    correlation_weight = _collect_correlation(
-        output,
-        m4_result,
-    )
-
-    # Calculate score.
-    output.risk_score = _calculate_score(
-        signals,
-        correlation_weight,
-    )
-
-    # Check authoritative threat intelligence.
-    output.authoritative_evidence = _authoritative_evidence(
-        m1_result,
-    )
-
-    # Calculate coverage and classify risk.
-    output.coverage = _calculate_coverage(
-        m1_result,
-        m2_results,
-        m3_result,
-        m5_result,
-        investigation_type,
-    )
-
-    output.risk_level = _classify_score(
-        output.risk_score,
-        output.coverage,
-        output.authoritative_evidence,
-    )
-
-    # Collect supporting evidence and indicators.
-    _collect_evidence(
-        output,
-        m1_result,
-        m5_result,
-    )
-
-    _collect_indicators(
-        output,
-        investigation_id,
-        original_url,
-        m1_result,
-        m3_result,
-        m5_result,
-    )
-
+    output.authoritative_evidence = _authoritative_evidence(m1_result)
+    output.coverage = _coverage(m1_result, m2_results, m3_result, m5_result, investigation_type)
+    output.risk_level = _decide_level(score, output)
+    _add_evidence(output, score, m1_result, m5_result)
+    output.indicators = _collect_indicators(output, investigation_id, original_url, m1_result, m3_result, m5_result)
     return output
 
 
-# ============================================================
-# THREAT REPORT GENERATION
-# ============================================================
+def _decide_level(score: RiskScore, output: AssessmentEvidence) -> RiskLevel:
+    if output.authoritative_evidence:
+        return RiskLevel.CONFIRMED_MALICIOUS
+    label = MODEL.level_label(score.probability)
+    if label == "high":
+        return RiskLevel.HIGH
+    if label == "suspicious":
+        return RiskLevel.SUSPICIOUS
+    # Nothing alarming was found, but only say Low if enough of the checks actually ran.
+    return RiskLevel.LOW if output.coverage >= MIN_COVERAGE else RiskLevel.INCONCLUSIVE
 
-def create_threat_report(investigation_id, assessment):
+
+def classify_risk(assessment: AssessmentEvidence) -> RiskLevel:
+    return assessment.risk_level or RiskLevel.INCONCLUSIVE
+
+
+def _add_evidence(output, score: RiskScore, m1_result, m5_result) -> None:
+    def add(module, description):
+        output.evidence.append(ReportEvidence(source_module=module, description=description))
+
+    for reference, result in _result_items(m1_result):
+        data = _unwrap(result)
+        if not data:
+            continue
+        chain = getattr(data, "redirect_chain", None)
+        if isinstance(chain, tuple) and len(chain) > 1 and chain[0] and chain[1]:
+            add("M1", f"Redirect chain for {reference or 'URL'}: {' | '.join(str(x) for x in chain[1])}")
+        providers = getattr(data, "threat_intelligence_provider_status", None)
+        if providers:
+            add("M1", "Threat-intelligence provider status: " + ", ".join(f"{k}={v}" for k, v in providers.items()))
+
+    for reference, result in _result_items(m5_result):
+        data = _unwrap(result)
+        fetched = getattr(data, "page_fetched", None) if data else None
+        if fetched and fetched[0] and fetched[1]:
+            add("M5", f"Final inspected URL: {fetched[1]}")
+
+    for line in output.authoritative_evidence:
+        add("ASSESSMENT", f"Authoritative evidence: {line}")
+
+    # Explainability: show how the score was built
+    parts = [f"{group} x{lr:.1f}" for group, lr in sorted(score.group_lr.items(), key=lambda kv: -kv[1])]
+    parts += [f"{f.title} x{f.lr:.1f}" for f in score.interactions]
+    add("ASSESSMENT", f"Risk model: prior {score.prior:.0%}, score {score.probability:.2f}. Contributions: "
+                      f"{'; '.join(parts) if parts else 'none'}.")
+    if score.capped:
+        add("ASSESSMENT", score.cap_reason or "Score capped.")
+    add("ASSESSMENT", f"Evidence coverage: {output.coverage:.0%} of expected checks produced a usable result.")
+
+
+def _collect_indicators(output, investigation_id, original_url, m1_result, m3_result, m5_result) -> list[ReportIndicator]:
+    try:
+        shared = extract_indicators(
+            investigation_id=investigation_id,
+            original_url=original_url or "",
+            m1_result=[r for _, r in _result_items(m1_result)],
+            m3_result=m3_result,
+            m5_result=[r for _, r in _result_items(m5_result)],
+        )
+    except Exception:  # a broken extractor must not sink the whole report
+        logger.exception("Indicator extraction failed for %s", investigation_id)
+        output.evidence.append(ReportEvidence(source_module="ASSESSMENT", description="Indicator extraction did not complete."))
+        return []
+
+    indicators = [
+        ReportIndicator(indicator_type=item.indicator_type.value, value=item.value, source_module=source.module)
+        for item in shared for source in item.sources
+    ]
+    grouped: dict[tuple, list[str]] = {}
+    for indicator in indicators:
+        sources = grouped.setdefault((indicator.indicator_type, indicator.value), [])
+        if indicator.source_module not in sources:
+            sources.append(indicator.source_module)
+    return [ReportIndicator(indicator_type=t, value=v, source_module=", ".join(s)) for (t, v), s in grouped.items()]
+
+
+def create_threat_report(investigation_id: str, assessment: AssessmentEvidence) -> ThreatReport:
+    """Generate a unified ThreatReport from collected assessment evidence."""
     risk_level = classify_risk(assessment)
+    score = assessment.risk_score
 
     summaries = {
-        RiskLevel.LOW: "No significant malicious indicators were identified.",
+        RiskLevel.LOW: "No significant malicious indicators were identified within the available checks. This is not a guarantee of safety.",
         RiskLevel.SUSPICIOUS: "Suspicious indicators were identified. Further investigation is recommended.",
         RiskLevel.HIGH: "Multiple strong indicators of potentially malicious activity were identified.",
-        RiskLevel.CONFIRMED_MALICIOUS: "Threat intelligence confirmed malicious activity.",
+        RiskLevel.CONFIRMED_MALICIOUS: "Authoritative threat intelligence confirmed malicious activity.",
         RiskLevel.INCONCLUSIVE: "Available analysis was insufficient to reach a reliable security assessment.",
     }
-
     summary = summaries[risk_level]
 
-    summary += f' Risk score: {assessment.risk_score}/100.'
-    summary += f' Evidence coverage: {assessment.coverage:.0%}.'
-
     if assessment.findings:
-        summary += f' {len(assessment.findings)} findings were recorded.'
+        count = len(assessment.findings)
+        summary += f" The analysis recorded {count} finding{'s' if count != 1 else ''}."
+        severity_counts: dict[str, int] = {}
+        for finding in assessment.findings:
+            severity = _severity_text(finding.severity)
+            severity_counts[severity] = severity_counts.get(severity, 0) + 1
+        summary += " Severity breakdown: " + ", ".join(f"{n} {s}" for s, n in sorted(severity_counts.items())) + "."
     else:
-        summary += ' No findings were recorded.'
+        summary += " No findings were recorded."
 
     if assessment.indicators:
-        summary += f' {len(assessment.indicators)} threat indicators were recorded.'
+        n = len(assessment.indicators)
+        summary += f" {n} unique threat indicator{'s' if n != 1 else ''} {'were' if n != 1 else 'was'} recorded."
 
-    incomplete = [
-        f'{module}: {status}'
-        for module, status in assessment.module_statuses.items()
-        if status in ('partial', 'failed')
-    ]
+    if score is not None:
+        summary += f" Risk model score: {score.probability:.2f} (uncalibrated), evidence coverage: {assessment.coverage:.0%}."
+        if score.interactions:
+            summary += " Key combinations: " + "; ".join(f.title for f in score.interactions) + "."
 
+    incomplete = [f"{m}: {s}" for m, s in assessment.module_statuses.items() if s in ("partial", "failed")]
     if incomplete:
-        summary += ' Incomplete analyses: ' + ', '.join(incomplete) + '.'
+        summary += " Incomplete analyses: " + ", ".join(incomplete) + "."
 
     return ThreatReport(
         report_id=str(uuid4()),
@@ -699,22 +343,11 @@ def create_threat_report(investigation_id, assessment):
     )
 
 
-# ============================================================
-# BLOCKCHAIN REPORT SUBMISSION
-# ============================================================
-
 def submit_and_verify_report(report):
+    """Submit a generated ThreatReport to M6 and verify its integrity."""
     from engines.threat_intelligence.report_manager import submit_report
     from engines.threat_intelligence.verification import verify_report
 
     submission = submit_report(report)
-
-    verification = verify_report(
-        report.report_id,
-        submission['version'],
-    )
-
-    return {
-        'submission': submission,
-        'verification': verification,
-    }
+    verification = verify_report(report.report_id, submission["version"])
+    return {"submission": submission, "verification": verification}
