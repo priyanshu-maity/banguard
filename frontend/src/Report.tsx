@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { InvestigationResult, ThreatReport, Risk, RedirectFlag, RedirectHop, riskOf, verifyReport, BlockchainVerification } from './api'
+import Highlighter from './Highlighter'
 
 const META: Record<Risk, { label: string; pos: number; note: string }> = {
   low: { label: 'Low risk', pos: 8, note: 'No significant indicators in the checks that ran.' },
@@ -159,6 +160,13 @@ export default function Dossier({ a }: { a: InvestigationResult }) {
       </header>
 
       <section className="block"><h3>What we found</h3><p className="lead">{r.summary}</p></section>
+
+      {a.message && a.investigation_type !== 'url' && (
+        <section className="block">
+          <h3>Your message, marked up</h3>
+          <Highlighter text={a.message} findings={r.findings ?? []} indicators={indicators} />
+        </section>
+      )}
 
       {statuses.length > 0 && (
         <section className="block">

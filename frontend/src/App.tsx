@@ -1,7 +1,8 @@
-
 import { useState } from 'react'
-import { analyze, InvestigationResult, InvestigationType } from './api'
+import { analyze, InvestigationResult } from './api'
 import Dossier from './Report'
+
+type Kind = 'url' | 'message'
 
 const STEPS = ['Normalising the address', 'Following redirects safely', 'Reading the certificate', 'Matching threat feeds', 'Writing the explanation']
 
@@ -11,8 +12,13 @@ const SAMPLES = [
   { name: 'A normal site', kind: 'url' as const, value: 'https://www.wikipedia.org' },
 ]
 
+const TABS: { kind: Kind; label: string }[] = [
+  { kind: 'url', label: 'Link or domain' },
+  { kind: 'message', label: 'Message' },
+]
+
 export default function App() {
-  const [kind, setKind] = useState<InvestigationType>('url')
+  const [kind, setKind] = useState<Kind>('url')
   const [url, setUrl] = useState('')
   const [message, setMessage] = useState('')
   const [submitToBlockchain, setSubmitToBlockchain] = useState(false)
@@ -20,14 +26,11 @@ export default function App() {
   const [res, setRes] = useState<InvestigationResult>()
   const [err, setErr] = useState('')
 
-  const go = async () => {
-    if ((kind === 'url' || kind === 'combined') && !url.trim()) {
-      setErr('Enter a link or domain to check.')
-      return
-    }
+  const current = kind === 'url' ? url : message
 
-    if ((kind === 'message' || kind === 'combined') && !message.trim()) {
-      setErr('Paste the message you received.')
+  const go = async () => {
+    if (!current.trim()) {
+      setErr(kind === 'url' ? 'Enter a link or domain to check.' : 'Paste the message you received.')
       return
     }
 
@@ -40,8 +43,7 @@ export default function App() {
     try {
       const result = await analyze({
         investigation_type: kind,
-        ...(kind !== 'message' ? { url: url.trim() } : {}),
-        ...(kind !== 'url' ? { message: message.trim() } : {}),
+        ...(kind === 'url' ? { url: url.trim() } : { message: message.trim() }),
         submit_to_blockchain: submitToBlockchain,
       })
 
@@ -54,9 +56,9 @@ export default function App() {
     }
   }
 
-  const sample = (kind: 'url' | 'message', value: string) => {
-    setKind(kind)
-    if (kind === 'url') setUrl(value)
+  const sample = (k: Kind, value: string) => {
+    setKind(k)
+    if (k === 'url') setUrl(value)
     else setMessage(value)
     setErr('')
   }
@@ -68,19 +70,17 @@ export default function App() {
         <p className="tag">Check it before you click it.</p>
 
         <div className="tabs" role="tablist">
-          {(['url', 'message', 'combined'] as const).map(k => (
-            <button key={k} role="tab" aria-selected={kind === k} className={kind === k ? 'on' : ''} onClick={() => { setKind(k); setErr('') }}>
-              {k === 'url' ? 'Link or domain' : k === 'message' ? 'Message' : 'Combined'}
+          {TABS.map(t => (
+            <button key={t.kind} role="tab" aria-selected={kind === t.kind} className={kind === t.kind ? 'on' : ''} onClick={() => { setKind(t.kind); setErr('') }}>
+              {t.label}
             </button>
           ))}
         </div>
 
-        {(kind === 'url' || kind === 'combined') && (
+        {kind === 'url' ? (
           <textarea value={url} onChange={e => setUrl(e.target.value)} rows={3} spellCheck={false} placeholder="https://example.com" />
-        )}
-
-        {(kind === 'message' || kind === 'combined') && (
-          <textarea value={message} onChange={e => setMessage(e.target.value)} rows={kind === 'combined' ? 5 : 7} spellCheck={false} placeholder="Paste the email, SMS or chat text here" />
+        ) : (
+          <textarea value={message} onChange={e => setMessage(e.target.value)} rows={7} spellCheck={false} placeholder="Paste the email, SMS or chat text here" />
         )}
 
         <p className="warn">Never paste passwords, OTPs or seed phrases.</p>
@@ -109,9 +109,7 @@ export default function App() {
           <section className="proc" aria-live="polite" aria-busy="true">
             <header>
               <h2>Investigating</h2>
-              <code title={kind === 'message' ? message : url}>
-                {(kind === 'message' ? message : url).slice(0, 70)}
-              </code>
+              <code title={current}>{current.length > 70 ? current.slice(0, 70) + '…' : current}</code>
             </header>
             <ol>
               {STEPS.map((s, i) => (
