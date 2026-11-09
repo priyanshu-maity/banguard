@@ -81,3 +81,5 @@ h3{margin:0 0 10px;font-size:1.15rem;font-weight:700}.lead{font-size:1.2rem;marg
 .tip{position:fixed;left:0;top:0;z-index:5;width:max-content;max-width:min(300px,70vw);padding:10px 14px;background:var(--ink);color:var(--paper);border-radius:8px;font-size:.85rem;line-height:1.45;font-weight:400;white-space:normal;opacity:0;pointer-events:none;transform:translateY(-4px);transition:opacity .15s,transform .15s}
 .tip b{display:block;margin-bottom:2px}
 .hl:hover .tip,.hl:focus .tip{opacity:1;transform:none}
+mark.hl.u-ind{border-bottom-style:dashed;border-bottom-color:var(--ink)}
+.tip b:not(:first-child){margin-top:6px}
