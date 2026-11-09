@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { InvestigationResult, ThreatReport, Risk, RedirectFlag, RedirectHop, riskOf, verifyReport, BlockchainVerification } from './api'
+import { InvestigationResult, ThreatReport, Risk, riskOf, verifyReport, BlockchainVerification } from './api'
 import Highlighter from './Highlighter'
 
 const META: Record<Risk, { label: string; pos: number; note: string }> = {
@@ -15,21 +15,6 @@ const mod = (s: string) => s.split(',').map(x => MOD[x.trim()] ?? x.trim()).join
 const SEV = ['critical', 'high', 'medium', 'low', 'info']
 const has = (e: { description: string }, p: string) => e.description.startsWith(p)
 
-const FLAG_TEXT: Record<RedirectFlag, string> = {
-  insecure_http: 'unencrypted',
-  url_shortener: 'shortener',
-  cross_domain: 'different domain',
-  internal_address: 'internal address',
-}
-
-// Older saved reports only have URLs in the evidence list, so build plain hops from those.
-const hopsFromUrls = (urls: string[]): RedirectHop[] =>
-  urls.map((url, i) => {
-    let host = url
-    try { host = new URL(url).hostname } catch { /* keep the raw text */ }
-    return { url, host, role: i === 0 ? 'start' : i === urls.length - 1 ? 'final' : 'redirect', flags: [] }
-  })
-
 function Strip({ risk }: { risk: Risk }) {
   const m = META[risk]
   return (
@@ -38,23 +23,6 @@ function Strip({ risk }: { risk: Risk }) {
       {m.pos >= 0 && <div className="tick" style={{ left: m.pos + '%' }}><i /></div>}
       <div className="scale"><span>safe</span><span>suspicious</span><span>high</span><span>malicious</span></div>
     </div>
-  )
-}
-
-function Chain({ hops }: { hops: RedirectHop[] }) {
-  const first = hops[0]?.host
-  return (
-    <ol className="chain">
-      {hops.map((h, i) => {
-        const drift = h.flags.includes('cross_domain') || (i === hops.length - 1 && h.host !== first)
-        return (
-          <li key={i} className={drift ? 'drift' : ''} title={h.url}>
-            <b>{h.host || h.url}</b>
-            {h.flags.map(f => <span key={f} className="sev">{FLAG_TEXT[f] ?? f}</span>)}
-          </li>
-        )
-      })}
-    </ol>
   )
 }
 
@@ -126,8 +94,6 @@ export default function Dossier({ a }: { a: InvestigationResult }) {
   const other = sorted.filter(f => f.source_module !== 'M2')
   const evidence = r.evidence ?? []
   const indicators = r.indicators ?? []
-  const flows = a.redirect_flows ?? []
-  const legacyRedirects = evidence.filter(e => has(e, 'Redirect observed:')).map(e => e.reference || e.description.replace('Redirect observed:', '').trim())
   const limits = evidence.filter(e => has(e, 'Analysis limitation:'))
   const related = evidence.filter(e => has(e, 'Historical correlation:'))
   const log = evidence.filter(e => !has(e, 'Redirect observed:') && !has(e, 'Analysis limitation:') && !has(e, 'Historical correlation:'))
@@ -174,26 +140,6 @@ export default function Dossier({ a }: { a: InvestigationResult }) {
           <div className="feeds">
             {statuses.map((s, i) => <span key={`${s.key}-${i}`} className={'st-' + s.status}>{MOD[s.key] ?? s.key}: {s.status.replace(/_/g, ' ')}</span>)}
           </div>
-        </section>
-      )}
-
-      {a.investigation_type !== 'message' && (
-        <section className="block">
-          <h3>Where the link really goes</h3>
-          {flows.map((f, k) => (
-            <div key={k}>
-              {flows.length > 1 && <p className="dim">{f.submitted_url}</p>}
-              <Chain hops={f.hops} />
-            </div>
-          ))}
-          {flows.length === 0 && legacyRedirects.length > 0 && <Chain hops={hopsFromUrls(legacyRedirects)} />}
-          {flows.length === 0 && legacyRedirects.length === 0 && (
-            <p className="dim">
-              {a.redirect_flows === undefined
-                ? 'The server did not send redirect data (backend not updated or field not returned).'
-                : 'No redirects were observed for the submitted link(s).'}
-            </p>
-          )}
         </section>
       )}
 
@@ -245,7 +191,7 @@ export default function Dossier({ a }: { a: InvestigationResult }) {
           <h3>What we could not check</h3>
           <ul className="lim">
             {limits.map((e, k) => <li key={k}>{e.description.replace('Analysis limitation: ', '')}</li>)}
-              {gaps.map((g, k) => <li key={k}>{MOD[g.key] ?? g.key} {g.status === 'partial' ? 'only partly completed.' : 'could not be performed.'}</li>)}
+            {gaps.map((g, k) => <li key={k}>{MOD[g.key] ?? g.key} {g.status === 'partial' ? 'only partly completed.' : 'could not be performed.'}</li>)}
           </ul>
         </section>
       )}

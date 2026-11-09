@@ -5,10 +5,12 @@ import Dossier from './Report'
 
 type Kind = 'url' | 'message'
 
+const MAX_CHARS = 5000
+
 const SAMPLES = [
-  { name: 'A bank link', kind: 'url' as const, value: 'https://secure-verify-hdfc.top/login?kyc=update' },
+  { name: 'A bank link', kind: 'url' as const, value: 'https://secure-verify-hffc.top/login?kyc=update' },
   { name: 'A prize text', kind: 'message' as const, value: 'URGENT: you won a prize! Verify KYC and share OTP at bit.ly/claim-now or your account is suspended.' },
-  { name: 'A normal site', kind: 'url' as const, value: 'https://www.wikipedia.org' },
+  { name: 'A normal site', kind: 'url' as const, value: 'https://www.reddit.com' },
 ]
 
 const TABS: { kind: Kind; label: string }[] = [
@@ -16,11 +18,35 @@ const TABS: { kind: Kind; label: string }[] = [
   { kind: 'message', label: 'Message' },
 ]
 
+// Returns an error message, or '' when the URL is acceptable. A scheme of http or https is mandatory.
+function checkUrl(raw: string): string {
+  const value = raw.trim()
+  if (!value) return 'Enter a link to check.'
+  if (value.length > MAX_CHARS) return `The link is too long (maximum ${MAX_CHARS} characters).`
+  if (/\s/.test(value)) return 'The link must not contain spaces or line breaks.'
+  if (!/^https?:\/\//i.test(value)) return 'The link must start with http:// or https://'
+
+  let parsed: URL
+  try {
+    parsed = new URL(value)
+  } catch {
+    return 'That is not a valid link. Example: https://example.com'
+  }
+
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return 'Only http:// and https:// links are accepted.'
+
+  const host = parsed.hostname
+  const isIpv6 = host.startsWith('[')
+  const validHost = isIpv6 || (host.includes('.') && !host.startsWith('.') && !host.endsWith('.') && !host.includes('..'))
+  if (!validHost) return 'The link needs a valid domain name, for example https://example.com'
+
+  return ''
+}
+
 export default function App() {
   const [kind, setKind] = useState<Kind>('url')
   const [url, setUrl] = useState('')
   const [message, setMessage] = useState('')
-  const [submitToBlockchain, setSubmitToBlockchain] = useState(false)
   const [busy, setBusy] = useState(false)
   const [prog, setProg] = useState<InvestigationProgress>()
   const [pct, setPct] = useState(0)
@@ -39,10 +65,26 @@ export default function App() {
   }, [prog])
 
   const go = async () => {
-    if (!current.trim()) {
-      setErr(kind === 'url' ? 'Enter a link or domain to check.' : 'Paste the message you received.')
-      return
+    if (kind === 'url') {
+      const problem = checkUrl(url)
+      if (problem) {
+        setErr(problem)
+        return
+      }
+    } else {
+      if (!message.trim()) {
+        setErr('Paste the message you received.')
+        return
+      }
+      if (message.length > MAX_CHARS) {
+        setErr(`The message is too long (maximum ${MAX_CHARS} characters).`)
+        return
+      }
     }
+
+    // Only the field being investigated keeps its value; the other one is cleared.
+    if (kind === 'url') setMessage('')
+    else setUrl('')
 
     setErr('')
     setRes(undefined)
@@ -66,7 +108,6 @@ export default function App() {
         investigation_type: kind,
         investigation_id: id,
         ...(kind === 'url' ? { url: url.trim() } : { message: message.trim() }),
-        submit_to_blockchain: submitToBlockchain,
       })
 
       setRes(result)
@@ -102,17 +143,12 @@ export default function App() {
         </div>
 
         {kind === 'url' ? (
-          <textarea value={url} onChange={e => setUrl(e.target.value)} rows={3} spellCheck={false} placeholder="https://example.com" />
+          <textarea value={url} onChange={e => setUrl(e.target.value)} rows={3} maxLength={MAX_CHARS} spellCheck={false} placeholder="https://example.com" />
         ) : (
-          <textarea value={message} onChange={e => setMessage(e.target.value)} rows={7} spellCheck={false} placeholder="Paste the email, SMS or chat text here" />
+          <textarea value={message} onChange={e => setMessage(e.target.value)} rows={7} maxLength={MAX_CHARS} spellCheck={false} placeholder="Paste the email, SMS or chat text here" />
         )}
 
-        <p className="warn">Never paste passwords, OTPs or seed phrases.</p>
-
-        <label className="blockchain-option">
-          <input type="checkbox" checked={submitToBlockchain} onChange={e => setSubmitToBlockchain(e.target.checked)} />
-          Record report on Sepolia blockchain
-        </label>
+        <p className="warn">Never paste passwords, OTPs or seed phrases. · {current.length}/{MAX_CHARS}</p>
 
         {err && <p className="err" role="alert">{err}</p>}
 
@@ -160,7 +196,7 @@ export default function App() {
           <div className="empty">
             <div className="strip big"><div className="bar" /></div>
             <h2>Is it safe?</h2>
-            <p className="dim">Submit a link or message. You get a verdict, the evidence behind it, and what we could not check.</p>
+            <p className="dim">Investigate suspicious links and messages before they become your next security incident.</p>
           </div>
         )}
 
