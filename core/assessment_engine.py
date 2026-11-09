@@ -6,16 +6,17 @@ import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from core.schema import ReportEvidence, ReportFinding, ReportIndicator, RiskLevel, ThreatReport
 from engines.threat_correlation.indicator_extractor import extract_indicators
 
-try:
+try:  # optional: load GROQ_API_KEY from .env
     from dotenv import load_dotenv
 
     load_dotenv()
-except ImportError:
+except ImportError:  # pragma: no cover
     pass
 
 logger = logging.getLogger(__name__)
@@ -167,6 +168,29 @@ BY_MODULE: dict[str, list[SignalSpec]] = {}
 for _spec in CATALOG:
     BY_MODULE.setdefault(_spec.module, []).append(_spec)
 
+# Derived by the engine from the URL text itself (not read from an analyzer result).
+THREAT_WORDS_SPEC = SignalSpec(
+    "M1", "threat_words_in_url", "Threat words in URL",
+    "The URL's host or path contains a word that announces malicious intent, such as 'malicious', 'phishing' or 'malware' "
+    "(detail = matched words). Strong on its own, but not conclusive: security-education sites can use these words too.", "high")
+_DERIVED = {THREAT_WORDS_SPEC.name}
+_THREAT_SUBSTRINGS = ("malicious", "phishing", "malware", "ransomware", "trojan", "keylogger", "spyware", "botnet", "stealer")
+_THREAT_TOKENS = {"phish", "scam", "fraud", "hack", "hacked", "hacker", "exploit", "virus", "payload"}  # whole words only
+
+
+def _threat_words(url: str) -> list[str]:
+    """Threat words in a URL's host and path (query strings are ignored)."""
+    try:
+        parts = urlsplit(url if "://" in url else f"//{url}")
+    except ValueError:
+        return []
+    text = f"{parts.hostname or ''}{parts.path}".lower()
+    found = [w for w in _THREAT_SUBSTRINGS if w in text]
+    tokens = set(re.split(r"[^a-z0-9]+", text))
+    found += sorted(t for t in _THREAT_TOKENS if t in tokens and not any(t in f for f in found))
+    return found[:6]
+
+
 _DETAIL_ATTR = {"brand_impersonation": "impersonation_evidence"}  # signal whose detail lives in another field
 _REDACTED = {"has_userinfo"}  # never send credential values to an external LLM
 
@@ -281,6 +305,8 @@ def _read_module(data, module: str, scope: str, signals: list[Signal]) -> dict:
         return {"no_data": True}
     fired, clear, not_evaluated = [], [], []
     for spec in BY_MODULE[module]:
+        if spec.name in _DERIVED:
+            continue
         flag, detail = _flag_detail(getattr(data, spec.name, None))
         if spec.name in _DETAIL_ATTR:
             detail = getattr(data, _DETAIL_ATTR[spec.name], None)
@@ -426,6 +452,11 @@ def _build_dossier(m1_result, m2_results, m3_result, m4_result, m5_result, inves
         context = _m1_context(m1_data)
         if context:
             section_m1["context"] = context
+        words = _threat_words(str(reference)) if reference else []
+        if words:
+            signal = Signal(f"S{len(signals) + 1}", THREAT_WORDS_SPEC, scope, words)
+            signals.append(signal)
+            section_m1.setdefault("fired", []).append({"id": signal.id, "signal": THREAT_WORDS_SPEC.name, "detail": words})
         targets.append({
             "ref": scope,
             "m1_status": _status_of(m1),
@@ -532,7 +563,7 @@ def _glossary() -> str:
     for module, title in (("M1", "URL analysis"), ("M2", "TLS certificate analysis"), ("M3", "Message analysis"),
                           ("M4", "Correlation"), ("M5", "Website security")):
         lines.append(f"{module} ({title}):")
-        for s in BY_MODULE[module]:
+        for s in BY_MODULE[module] + ([THREAT_WORDS_SPEC] if module == "M1" else []):
             lines.append(f"- {s.name} [{s.role}, baseline {s.severity}]: {s.meaning}")
     return "\n".join(lines)
 
@@ -561,6 +592,9 @@ REASONING RULES
 - Signals with role "hygiene" (missing security headers, expired certificate) are configuration weaknesses. Report them as such, \
 with low severity, and never let them alone raise the risk level.
 - Signals with role "info" are context or limitations, not risks.
+- URL TEXT: read every URL in the dossier ("ref" fields) yourself. Words that announce malicious intent (malicious, phishing, malware, \
+scam, ransomware...) in a URL are a strong sign: cite the "threat_words_in_url" signal, rate that finding high, and say which words you saw. \
+Combine it with other evidence; on its own it supports "suspicious", with any corroborating signal it supports "high".
 - Combinations matter: e.g. newly registered + brand in subdomain + login keywords is far stronger than any one of them.
 - CALIBRATION: a malicious link does NOT need many indicators. One strong (baseline high) signal plus ANY corroborating \
 risk signal is enough for "high"; two medium-or-high risk signals are also enough. One strong signal alone is "suspicious". \
