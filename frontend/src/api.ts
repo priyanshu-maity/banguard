@@ -1,4 +1,10 @@
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '')
+const API_BASE_URL = (
+  import.meta.env.VITE_API_BASE_URL ?? ''
+).replace(/\/$/, '')
+
+if (!API_BASE_URL && import.meta.env.PROD) {
+  throw new Error('VITE_API_BASE_URL is not configured.')
+}
 
 export type Risk = 'low' | 'suspicious' | 'high' | 'confirmed_malicious' | 'inconclusive'
 
@@ -111,7 +117,6 @@ export interface InvestigationProgress {
   [key: string]: unknown
 }
 
-// Generate a unique ID before starting an investigation.
 export function createInvestigationId(): string {
   return crypto.randomUUID()
 }
@@ -163,7 +168,6 @@ export async function analyze(input: InvestigationRequest): Promise<Investigatio
   return response.data
 }
 
-// Retrieve live progress for an investigation.
 export async function getProgress(investigationId: string): Promise<InvestigationProgress> {
   const response = await request<{ success: boolean; data: InvestigationProgress }>(
     `/investigate/${encodeURIComponent(investigationId)}/progress`
