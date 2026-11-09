@@ -1,4 +1,3 @@
-
 from typing import Literal
 from urllib.parse import urlsplit
 
