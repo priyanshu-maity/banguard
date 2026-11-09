@@ -1,3 +1,29 @@
+"""
+core/assessment_engine.py
+
+LLM-driven assessment engine.
+
+Pipeline
+    1. Every analyzer signal (M1, M2, M3, M4, M5) is read from the dataclasses, sanitised and
+       turned into a compact "dossier" in which each fired signal has an ID (S1, S2, ...).
+    2. The dossier is sent to Groq together with a glossary that explains what every signal means.
+    3. The LLM returns a risk level, a plain-language summary and findings. Every finding must
+       cite signal IDs, otherwise it is discarded (evidence-grounded output).
+    4. Deterministic guardrails have the last word on the risk level. The LLM cannot declare
+       "Confirmed Malicious" on its own, cannot call something High/Suspicious without risk signals,
+       and cannot say "Low" when too few checks actually ran.
+    5. If Groq is unavailable, a deterministic fallback produces the same output shape.
+
+Public API (used by core/orchestration.py), unchanged:
+    collect_assessment_evidence(...)  -> AssessmentEvidence
+    create_threat_report(investigation_id, assessment) -> ThreatReport
+    submit_and_verify_report(report)
+
+Environment (.env):
+    GROQ_API_KEY            required
+    GROQ_MODEL              default: openai/gpt-oss-120b
+    GROQ_FALLBACK_MODEL     default: llama-3.3-70b-versatile
+"""
 from __future__ import annotations
 
 import json
@@ -31,6 +57,8 @@ LLM_MAX_OUTPUT_TOKENS = 3000
 CONFIRMED_VT_MIN_ENGINES = 3  # VirusTotal malicious detections needed for Confirmed Malicious
 MIN_COVERAGE = 0.60  # below this, a "low" result is reported as Inconclusive
 MAX_FINDINGS = 12
+SUMMARY_MIN_CHARS = 350
+SUMMARY_MAX_CHARS = 450
 MAX_LIST_ITEMS = 8
 
 _SEVERITIES = ("info", "low", "medium", "high")
@@ -488,7 +516,9 @@ REASONING RULES
 with low severity, and never let them alone raise the risk level.
 - Signals with role "info" are context or limitations, not risks.
 - Combinations matter: e.g. newly registered + brand in subdomain + login keywords is far stronger than any one of them.
-- Weak signals (baseline low) alone should not move a result above "low".
+- CALIBRATION: a malicious link does NOT need many indicators. One strong (baseline high) signal plus ANY corroborating \
+risk signal is enough for "high"; two medium-or-high risk signals are also enough. One strong signal alone is "suspicious". \
+Do not settle on "suspicious" when the evidence supports "high", and do not inflate weak (baseline low) signals, which alone stay "low".
 - "not_evaluated" items, failed or skipped modules and low coverage are limitations. State them honestly.
 - Distinguish ordinary certificate misconfiguration from distrusted-CA intelligence. Never claim that you detected a CA key-generation \
 weakness; only that the chain matches a distrust list.
@@ -509,7 +539,7 @@ OUTPUT
 Reply with ONE JSON object and nothing else:
 {{
   "risk_level": "low|suspicious|high|confirmed_malicious|inconclusive",
-  "summary": "2-4 plain-language sentences: what was analysed, the verdict, and the main reasons. Mention uncertainty.",
+  "summary": "plain-language verdict and main reasons, 380-430 characters in total (hard limit 450), no lists",
   "findings": [
     {{"title": "short title", "description": "what was observed and why it matters, citing concrete values from the dossier",
       "severity": "info|low|medium|high", "impact": "potential consequence for the user",
@@ -616,7 +646,7 @@ def _validate_llm(raw: dict, by_id: dict[str, Signal]) -> dict:
 
     return {
         "level": level,
-        "summary": _clean(raw.get("summary") or "", 900),
+        "summary": _clean(raw.get("summary") or "", 600),
         "findings": findings,
         "cited": cited,
         "recommendations": strings("recommendations", 6),
@@ -627,40 +657,52 @@ def _validate_llm(raw: dict, by_id: dict[str, Signal]) -> dict:
 # --------------------------------------------------------------------------------------
 # Deterministic guardrails and fallback
 # --------------------------------------------------------------------------------------
+def _risk_sets(signals: list[Signal]):
+    risk = [s for s in signals if s.spec.role == "risk"]
+    strong = [s for s in risk if s.spec.severity in ("medium", "high")]
+    anchors = [s for s in risk if s.spec.severity == "high"]
+    return risk, strong, anchors
+
+
+def _is_high_evidence(signals: list[Signal]) -> bool:
+    """A strong signal plus any corroborating risk signal, or two medium/high risk signals."""
+    risk, strong, anchors = _risk_sets(signals)
+    return (bool(anchors) and len(risk) >= 2) or len(strong) >= 2
+
+
 def _heuristic_level(signals: list[Signal]) -> RiskLevel:
     """Used only when the LLM is unavailable."""
-    points = {"high": 3, "medium": 2, "low": 1}
-    risk = [s for s in signals if s.spec.role == "risk"]
-    total = sum(points.get(s.spec.severity, 0) for s in risk)
-    strong = [s for s in risk if s.spec.severity in ("medium", "high")]
-    if total >= 6 and len(strong) >= 2:
+    risk, strong, _ = _risk_sets(signals)
+    if _is_high_evidence(signals):
         return RiskLevel.HIGH
-    if any(points.get(s.spec.severity, 0) >= 2 for s in risk):
+    if strong or len(risk) >= 3:
         return RiskLevel.SUSPICIOUS
     return RiskLevel.LOW
 
 
 def _decide_level(proposed: RiskLevel, signals: list[Signal], coverage: float,
                   authoritative: list[str]) -> tuple[RiskLevel, list[str]]:
-    """The LLM proposes; these rules decide."""
+    """The LLM proposes; these rules decide (in both directions)."""
     notes: list[str] = []
     if authoritative:
         return RiskLevel.CONFIRMED_MALICIOUS, notes
 
-    risk = [s for s in signals if s.spec.role == "risk"]
-    strong = [s for s in risk if s.spec.severity in ("medium", "high")]
-    anchors = [s for s in risk if s.spec.severity == "high"]
+    risk, strong, anchors = _risk_sets(signals)
     level = proposed
 
     if level == RiskLevel.CONFIRMED_MALICIOUS:
         level = RiskLevel.HIGH
         notes.append("Model proposed Confirmed Malicious without authoritative evidence; downgraded to High.")
-    if level in (RiskLevel.HIGH, RiskLevel.SUSPICIOUS) and not risk:
+    if level in (RiskLevel.HIGH, RiskLevel.SUSPICIOUS) and not strong and len(risk) < 3:
         level = RiskLevel.LOW
-        notes.append("Model proposed an elevated level but no risk signals fired; level reset.")
-    if level == RiskLevel.HIGH and len(strong) < 2:
+        notes.append("Model proposed an elevated level but only weak or no risk signals fired; level reset.")
+    if _is_high_evidence(signals):
+        if level != RiskLevel.HIGH:
+            level = RiskLevel.HIGH
+            notes.append("A strong indicator with corroborating signals (or multiple significant indicators) fired; raised to High.")
+    elif level == RiskLevel.HIGH:
         level = RiskLevel.SUSPICIOUS
-        notes.append("High requires multiple significant indicators; level set to Suspicious.")
+        notes.append("High requires corroborated strong evidence; level set to Suspicious.")
     if level in (RiskLevel.LOW, RiskLevel.INCONCLUSIVE) and anchors:
         level = RiskLevel.SUSPICIOUS
         notes.append("A strong indicator fired, so the result cannot be Low or Inconclusive; level set to Suspicious.")
@@ -702,6 +744,10 @@ def _build_evidence(output: AssessmentEvidence, signals: list[Signal], guardrail
     for note in guardrail_notes:
         add("ASSESSMENT", f"Guardrail: {note}")
     add("ASSESSMENT", f"Evidence coverage: {output.coverage:.0%} of expected checks produced a usable result.")
+    for action in output.recommendations:
+        add("ASSESSMENT", f"Recommended action: {action}")
+    for limitation in output.limitations:
+        add("ASSESSMENT", f"Limitation: {limitation}")
     add("ASSESSMENT", f"Narrative generated by {output.llm_model}." if output.llm_model
         else "Narrative generated by the deterministic fallback (LLM unavailable).")
 
@@ -774,9 +820,13 @@ def collect_assessment_evidence(investigation_id, original_url="", m1_result=Non
     output.findings.sort(key=lambda f: -_SEV_RANK.get(str(f.severity).lower(), 0))
 
     # Narrative
-    summary = llm["summary"] if llm and llm["summary"] else _FALLBACK_SUMMARY[output.risk_level]
-    if notes and llm:  # the model's wording may no longer match the final level
-        summary = f"{_FALLBACK_SUMMARY[output.risk_level]} {summary}"
+    if llm and llm["summary"] and output.risk_level == llm["level"]:
+        summary = llm["summary"]
+    else:  # no model text, or the guardrails changed the level so the model's wording may no longer match
+        summary = _FALLBACK_SUMMARY[output.risk_level]
+        titles = [f.title for f in output.findings[:3]]
+        if titles:
+            summary += " Key findings: " + "; ".join(titles) + "."
     output.summary = summary
     output.recommendations = (llm["recommendations"] if llm and llm["recommendations"] else _FALLBACK_ACTIONS[output.risk_level])
     limitations = _static_limitations(m1_result, output.module_statuses) + (llm["limitations"] if llm else [])
@@ -791,21 +841,38 @@ def classify_risk(assessment: AssessmentEvidence) -> RiskLevel:
     return assessment.risk_level or RiskLevel.INCONCLUSIVE
 
 
+def _fit_summary(main: str, extras: list[str]) -> str:
+    """Keep the report summary within SUMMARY_MIN_CHARS..SUMMARY_MAX_CHARS."""
+    text = " ".join(main.split())
+    for extra in extras:
+        if len(text) >= SUMMARY_MIN_CHARS:
+            break
+        extra = " ".join(extra.split())
+        if len(text) + 1 + len(extra) <= SUMMARY_MAX_CHARS:
+            text += " " + extra
+    if len(text) > SUMMARY_MAX_CHARS:
+        cut = text[:SUMMARY_MAX_CHARS]
+        end = max(cut.rfind(". "), cut.rfind("."))
+        if end >= SUMMARY_MIN_CHARS:
+            text = cut[: end + 1]
+        else:
+            text = cut[: SUMMARY_MAX_CHARS - 1].rsplit(" ", 1)[0].rstrip(",;:") + "\u2026"
+    return text
+
+
 def create_threat_report(investigation_id: str, assessment: AssessmentEvidence) -> ThreatReport:
     """Generate the unified ThreatReport from the assessment."""
     risk_level = classify_risk(assessment)
-    parts = [assessment.summary or _FALLBACK_SUMMARY[risk_level]]
-    parts.append(f"Evidence coverage: {assessment.coverage:.0%}.")
-    if assessment.recommendations:
-        parts.append("Recommended actions: " + " ".join(f"({i}) {r.rstrip('.')}." for i, r in enumerate(assessment.recommendations, 1)))
-    if assessment.limitations:
-        parts.append("Limitations: " + " ".join(f"{l.rstrip('.')}." for l in assessment.limitations))
+    extras = [f"Evidence coverage: {assessment.coverage:.0%} of expected checks."]
+    extras += [r.rstrip(".") + "." for r in assessment.recommendations[:2]]
+    extras += [l.rstrip(".") + "." for l in assessment.limitations[:1]]
+    summary = _fit_summary(assessment.summary or _FALLBACK_SUMMARY[risk_level], extras)
     return ThreatReport(
         report_id=str(uuid4()),
         investigation_id=investigation_id,
         created_at=datetime.now(timezone.utc).isoformat(),
         risk_level=risk_level,
-        summary=" ".join(parts),
+        summary=summary,
         findings=list(assessment.findings),
         indicators=list(assessment.indicators),
         evidence=list(assessment.evidence),
