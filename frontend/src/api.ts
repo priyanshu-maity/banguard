@@ -1,4 +1,3 @@
-
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '')
 
 export type Risk = 'low' | 'suspicious' | 'high' | 'confirmed_malicious' | 'inconclusive'
@@ -55,6 +54,29 @@ export interface BlockchainVerification {
   submitter?: string
 }
 
+export type BlockchainStatus =
+  | 'not_submitted'
+  | 'submitted'
+  | 'submitted_verified'
+  | 'submitted_verification_failed'
+  | 'failed'
+
+export type RedirectFlag = 'insecure_http' | 'url_shortener' | 'cross_domain' | 'internal_address'
+
+export interface RedirectHop {
+  url: string // query string and credentials already removed by the backend
+  host: string
+  role: 'start' | 'redirect' | 'final'
+  flags: RedirectFlag[]
+}
+
+export interface RedirectFlow {
+  submitted_url: string
+  hop_count: number
+  crosses_domains: boolean
+  hops: RedirectHop[]
+}
+
 export interface InvestigationResult {
   investigation_id: string
   original_url?: string | null
@@ -67,16 +89,21 @@ export interface InvestigationResult {
   m4_result?: unknown
   m5_results?: Record<string, unknown>
   threat_report: ThreatReport
+  redirect_flows?: RedirectFlow[]
   report_submission?: BlockchainSubmission | null
   report_verification?: BlockchainVerification | null
   report_submission_error?: string | null
+  report_submission_skipped_reason?: string | null
+  blockchain_status?: BlockchainStatus
+  blockchain_message?: string
 }
 
 export interface InvestigationRequest {
   investigation_type: InvestigationType
   url?: string
   message?: string
-  submit_to_blockchain: boolean
+  /** @deprecated Blockchain submission is now automatic; the backend ignores this. */
+  submit_to_blockchain?: boolean
 }
 
 export const riskOf = (value: string): Risk => {
