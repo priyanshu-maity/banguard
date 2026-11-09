@@ -164,7 +164,7 @@ export default function Dossier({ a }: { a: InvestigationResult }) {
       {a.message && a.investigation_type !== 'url' && (
         <section className="block">
           <h3>Your message, marked up</h3>
-          <Highlighter text={a.message} findings={r.findings ?? []} indicators={indicators} />
+          <Highlighter text={a.message} evidence={evidence} indicators={indicators} />
         </section>
       )}
 

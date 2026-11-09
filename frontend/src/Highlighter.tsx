@@ -1,3 +1,4 @@
+import { Component } from 'react'
 import type { ReactNode, SyntheticEvent } from 'react'
 import type { Evidence, Indicator } from './api'
 
@@ -40,10 +41,12 @@ const place = (e: SyntheticEvent<HTMLElement>) => {
   tip.style.top = (r.bottom + 8 + h > innerHeight ? Math.max(8, r.top - h - 8) : r.bottom + 8) + 'px'
 }
 
-export default function Highlighter({ text, evidence, indicators }: { text: string; evidence: Evidence[]; indicators: Indicator[] }) {
-  const marks: Mark[] = phraseMarks(evidence)
+type Props = { text: string; evidence?: Evidence[]; indicators?: Indicator[] }
 
-  indicators.forEach(x => marks.push({
+function HighlighterInner({ text, evidence, indicators }: Props) {
+  const marks: Mark[] = phraseMarks(Array.isArray(evidence) ? evidence : [])
+
+  ;(Array.isArray(indicators) ? indicators : []).filter(x => typeof x?.value === 'string' && x.value).forEach(x => marks.push({
     needle: x.value,
     title: 'Extracted ' + x.indicator_type.replace(/_/g, ' '),
     reason: 'Pulled out of the message and checked by ' + mod(x.source_module) + '.',
@@ -55,7 +58,8 @@ export default function Highlighter({ text, evidence, indicators }: { text: stri
   const missed: Mark[] = []
 
   marks.forEach(m => {
-    const re = new RegExp(m.needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+'), 'gi')
+    let re: RegExp
+    try { re = new RegExp(m.needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+'), 'gi') } catch { return }
     let hit = false
     for (const x of text.matchAll(re)) {
       if (!x[0]) continue
@@ -103,4 +107,24 @@ export default function Highlighter({ text, evidence, indicators }: { text: stri
       {missed.length > 0 && <p className="dim sm">Flagged by the analyser but not found word for word in your text: {missed.map(m => `“${m.needle}”`).join(', ')}.</p>}
     </>
   )
+}
+
+// A problem while marking up the text must never blank the whole report: fall back to the plain message.
+class Boundary extends Component<{ text: string; children: ReactNode }, { failed: boolean }> {
+  state = { failed: false }
+  static getDerivedStateFromError() { return { failed: true } }
+  componentDidCatch(error: unknown) { console.error('Message highlighter failed', error) }
+  render() {
+    if (!this.state.failed) return this.props.children
+    return (
+      <>
+        <p className="msg">{this.props.text}</p>
+        <p className="dim sm">The highlights could not be shown for this message.</p>
+      </>
+    )
+  }
+}
+
+export default function Highlighter(props: Props) {
+  return <Boundary text={props.text}><HighlighterInner {...props} /></Boundary>
 }
