@@ -1,10 +1,12 @@
-
 import ipaddress
+import logging
 
 from engines.url_analyzer.analysis_result import URLAnalysisResult
 from engines.url_analyzer.url_normalizer import URLNormalizer
 
 from .schema import IndicatorType, IndicatorSource, SharedIndicator
+
+logger = logging.getLogger(__name__)
 
 
 def _unwrap_result(result):
@@ -15,12 +17,34 @@ def _unwrap_result(result):
 
 
 def _as_result_list(result):
-    """Normalize one or multiple module results into a list of module data."""
+    """Normalize one or multiple module results (single, list/tuple, or dict of results) into a list of module data."""
     if result is None:
         return []
 
-    results = result if isinstance(result, (list, tuple)) else [result]
+    if isinstance(result, dict):
+        results = list(result.values())
+    elif isinstance(result, (list, tuple)):
+        results = result
+    else:
+        results = [result]
     return [data for item in results if (data := _unwrap_result(item)) is not None]
+
+
+def _flag(data, name: str):
+    """First element of a (flag, detail) tuple field, or None if absent."""
+    value = getattr(data, name, None)
+    return value[0] if isinstance(value, tuple) and value else None
+
+
+def _detail(data, name: str):
+    """Second element of a (flag, detail) tuple field, or None if absent."""
+    value = getattr(data, name, None)
+    return value[1] if isinstance(value, tuple) and len(value) > 1 else None
+
+
+def _detail_list(data, name: str) -> list:
+    detail = _detail(data, name)
+    return list(detail) if isinstance(detail, (list, tuple, set)) else []
 
 
 def _normalize_url(url: str) -> tuple[str | None, str | None]:
@@ -29,7 +53,7 @@ def _normalize_url(url: str) -> tuple[str | None, str | None]:
         normalizer = URLNormalizer(url, URLAnalysisResult())
         normalized_url = normalizer.normalize()
         return normalized_url, normalizer.domain
-    except (ValueError, AttributeError, TypeError):
+    except Exception:  # one malformed URL must never abort extraction
         return None, None
 
 
@@ -63,6 +87,8 @@ def _add_indicator(indicators: dict, indicator_type: IndicatorType, value: str, 
 
 def _add_url(indicators: dict, url: str, investigation_id: str, module: str):
     """Add a URL and its corresponding domain."""
+    if not isinstance(url, str):
+        return
     normalized_url, domain = _normalize_url(url)
 
     if normalized_url is None:
@@ -84,8 +110,62 @@ def _add_ip(indicators: dict, value: str, investigation_id: str, module: str):
     _add_indicator(indicators, IndicatorType.IP_ADDRESS, normalized_ip, investigation_id, module)
 
 
+def _extract_m1(indicators: dict, m1, investigation_id: str):
+    if _flag(m1, "uses_ip_address"):
+        _add_ip(indicators, _detail(m1, "uses_ip_address"), investigation_id, "M1")
+
+    for value in _detail_list(m1, "redirect_chain"):
+        if isinstance(value, str):
+            url = value.rsplit(" -> ", 1)[-1]  # last hop, works for "a -> b" and "a -> b -> c"
+            _add_url(indicators, url, investigation_id, "M1")
+
+    for name in ("cross_domain_redirect", "url_shortener_detected"):
+        for domain in _detail_list(m1, name):
+            normalized_domain = _normalize_domain(domain)
+            if normalized_domain:
+                _add_indicator(indicators, IndicatorType.DOMAIN, normalized_domain, investigation_id, "M1")
+
+    for value in _detail_list(m1, "ssrf_attempt_detected"):
+        if not isinstance(value, str):
+            continue
+        hostname = value.split(" -> ", 1)[0].strip()
+        try:
+            ipaddress.ip_address(hostname)
+            continue
+        except ValueError:
+            normalized_domain = _normalize_domain(hostname)
+            if normalized_domain and normalized_domain != "localhost":
+                _add_indicator(indicators, IndicatorType.DOMAIN, normalized_domain, investigation_id, "M1")
+
+
+def _extract_m3(indicators: dict, m3, investigation_id: str):
+    for url in getattr(m3, "urls", None) or []:
+        _add_url(indicators, url, investigation_id, "M3")
+
+    for email in getattr(m3, "email_addresses", None) or []:
+        _add_indicator(indicators, IndicatorType.EMAIL, email.lower(), investigation_id, "M3")
+
+    for phone in getattr(m3, "phone_numbers", None) or []:
+        normalized_phone = "".join(char for char in phone if char.isdigit() or char == "+")
+        _add_indicator(indicators, IndicatorType.PHONE_NUMBER, normalized_phone, investigation_id, "M3")
+
+
+def _extract_m5(indicators: dict, m5, investigation_id: str):
+    # WebsiteSecurityResult has no final_url / resolved_ips attributes:
+    #   page_fetched         = (fetched: bool | None, final_url: str | None)
+    #   publicly_resolvable  = (resolves_only_to_public: bool | None, addresses: list[str])
+    if _flag(m5, "page_fetched") and _detail(m5, "page_fetched"):
+        _add_url(indicators, _detail(m5, "page_fetched"), investigation_id, "M5")
+
+    for ip in _detail_list(m5, "publicly_resolvable"):
+        _add_ip(indicators, ip, investigation_id, "M5")
+
+
 def extract_indicators(investigation_id: str, original_url: str = "", m1_result=None, m2_result=None, m3_result=None, m5_result=None) -> list[SharedIndicator]:
-    """Extract and deduplicate indicators from all investigation modules."""
+    """Extract and deduplicate indicators from all investigation modules.
+
+    Each module is extracted independently, so a problem with one module's data cannot discard the others' indicators.
+    """
     indicators = {}
 
     # Original investigation URL
@@ -94,54 +174,24 @@ def extract_indicators(investigation_id: str, original_url: str = "", m1_result=
 
     # M1: URL analysis, supporting multiple URLs
     for m1 in _as_result_list(m1_result):
-        if m1.uses_ip_address[0]:
-            _add_ip(indicators, m1.uses_ip_address[1], investigation_id, "M1")
-
-        for value in m1.redirect_chain[1]:
-            url = value.split(" -> ", 1)[-1] if " -> " in value else value
-            _add_url(indicators, url, investigation_id, "M1")
-
-        for domain in m1.cross_domain_redirect[1]:
-            normalized_domain = _normalize_domain(domain)
-            if normalized_domain:
-                _add_indicator(indicators, IndicatorType.DOMAIN, normalized_domain, investigation_id, "M1")
-
-        for domain in m1.url_shortener_detected[1]:
-            normalized_domain = _normalize_domain(domain)
-            if normalized_domain:
-                _add_indicator(indicators, IndicatorType.DOMAIN, normalized_domain, investigation_id, "M1")
-
-        for value in m1.ssrf_attempt_detected[1]:
-            hostname = value.split(" -> ", 1)[0].strip()
-
-            try:
-                ipaddress.ip_address(hostname)
-                continue
-            except ValueError:
-                normalized_domain = _normalize_domain(hostname)
-                if normalized_domain and normalized_domain != "localhost":
-                    _add_indicator(indicators, IndicatorType.DOMAIN, normalized_domain, investigation_id, "M1")
+        try:
+            _extract_m1(indicators, m1, investigation_id)
+        except Exception:
+            logger.exception("M1 indicator extraction failed for %s", investigation_id)
 
     # M3: Message analysis
     m3 = _unwrap_result(m3_result)
-
     if m3 is not None:
-        for url in m3.urls:
-            _add_url(indicators, url, investigation_id, "M3")
-
-        for email in m3.email_addresses:
-            _add_indicator(indicators, IndicatorType.EMAIL, email.lower(), investigation_id, "M3")
-
-        for phone in m3.phone_numbers:
-            normalized_phone = "".join(char for char in phone if char.isdigit() or char == "+")
-            _add_indicator(indicators, IndicatorType.PHONE_NUMBER, normalized_phone, investigation_id, "M3")
+        try:
+            _extract_m3(indicators, m3, investigation_id)
+        except Exception:
+            logger.exception("M3 indicator extraction failed for %s", investigation_id)
 
     # M5: Website security analysis, supporting multiple URLs
     for m5 in _as_result_list(m5_result):
-        if m5.final_url:
-            _add_url(indicators, m5.final_url, investigation_id, "M5")
-
-        for ip in m5.resolved_ips:
-            _add_ip(indicators, ip, investigation_id, "M5")
+        try:
+            _extract_m5(indicators, m5, investigation_id)
+        except Exception:
+            logger.exception("M5 indicator extraction failed for %s", investigation_id)
 
     return list(indicators.values())
