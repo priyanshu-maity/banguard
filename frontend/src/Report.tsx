@@ -169,7 +169,7 @@ export default function Dossier({ a }: { a: InvestigationResult }) {
         </section>
       )}
 
-      {(flows.length > 0 || legacyRedirects.length > 0) && (
+      {a.investigation_type !== 'message' && (
         <section className="block">
           <h3>Where the link really goes</h3>
           {flows.map((f, k) => (
@@ -178,7 +178,14 @@ export default function Dossier({ a }: { a: InvestigationResult }) {
               <Chain hops={f.hops} />
             </div>
           ))}
-          {flows.length === 0 && <Chain hops={hopsFromUrls(legacyRedirects)} />}
+          {flows.length === 0 && legacyRedirects.length > 0 && <Chain hops={hopsFromUrls(legacyRedirects)} />}
+          {flows.length === 0 && legacyRedirects.length === 0 && (
+            <p className="dim">
+              {a.redirect_flows === undefined
+                ? 'The server did not send redirect data (backend not updated or field not returned).'
+                : 'No redirects were observed for the submitted link(s).'}
+            </p>
+          )}
         </section>
       )}
 
