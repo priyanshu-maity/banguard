@@ -13,6 +13,7 @@ from api.database import get_investigation, get_report, initialize_database, sav
 from api.models import InvestigationRequest
 from api.serializer import to_jsonable
 from core.orchestrator import run_investigation
+from core.progress_routes import router as progress_router
 from engines.threat_intelligence.verification import verify_report
 
 
@@ -33,6 +34,8 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+app.include_router(progress_router)
 
 
 allowed_origins = [
@@ -68,6 +71,7 @@ def investigate(request: InvestigationRequest):
     try:
         investigation = run_investigation(
             url=request.url,
+            investigation_id=request.investigation_id,
             investigation_type=request.investigation_type,
             message=request.message,
             submit_to_blockchain=request.submit_to_blockchain,
@@ -87,7 +91,6 @@ def investigate(request: InvestigationRequest):
             status_code=500,
             detail="The investigation could not be completed. Check the backend logs.",
         )
-
 
 @app.get("/api/investigations/{investigation_id}")
 def retrieve_investigation(investigation_id: str):

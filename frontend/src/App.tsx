@@ -1,10 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { analyze, InvestigationResult } from './api'
+import { getProgress, newId, percent, InvestigationProgress } from './progress'
 import Dossier from './Report'
 
 type Kind = 'url' | 'message'
-
-const STEPS = ['Normalising the address', 'Following redirects safely', 'Reading the certificate', 'Matching threat feeds', 'Writing the explanation']
 
 const SAMPLES = [
   { name: 'A bank link', kind: 'url' as const, value: 'https://secure-verify-hdfc.top/login?kyc=update' },
@@ -22,11 +21,22 @@ export default function App() {
   const [url, setUrl] = useState('')
   const [message, setMessage] = useState('')
   const [submitToBlockchain, setSubmitToBlockchain] = useState(false)
-  const [step, setStep] = useState(-1)
+  const [busy, setBusy] = useState(false)
+  const [prog, setProg] = useState<InvestigationProgress>()
+  const [pct, setPct] = useState(0)
   const [res, setRes] = useState<InvestigationResult>()
   const [err, setErr] = useState('')
+  const listRef = useRef<HTMLOListElement>(null)
 
   const current = kind === 'url' ? url : message
+  const stages = (prog?.stages ?? []).filter(s => s.status !== 'skipped')
+
+  // Keep the stage that is running in view when the list scrolls.
+  useEffect(() => {
+    const list = listRef.current
+    const row = list?.querySelector<HTMLElement>('li.now')
+    if (list && row) list.scrollTop = Math.max(0, row.offsetTop - list.clientHeight / 2)
+  }, [prog])
 
   const go = async () => {
     if (!current.trim()) {
@@ -36,13 +46,25 @@ export default function App() {
 
     setErr('')
     setRes(undefined)
-    setStep(0)
+    setProg(undefined)
+    setPct(0)
+    setBusy(true)
 
-    const timer = setInterval(() => setStep(s => Math.min(s + 1, STEPS.length - 1)), 520)
+    // The page picks the id so it can ask the backend how far along the investigation is while it runs.
+    const id = newId()
+    let live = true
+    const timer = setInterval(async () => {
+      const p = await getProgress(id)
+      if (p && live) {
+        setProg(p)
+        setPct(v => Math.max(v, percent(p))) // never moves backwards when new stages are added
+      }
+    }, 350)
 
     try {
       const result = await analyze({
         investigation_type: kind,
+        investigation_id: id,
         ...(kind === 'url' ? { url: url.trim() } : { message: message.trim() }),
         submit_to_blockchain: submitToBlockchain,
       })
@@ -51,8 +73,10 @@ export default function App() {
     } catch (error) {
       setErr(error instanceof Error ? error.message : 'The investigation failed. Check that the backend is running.')
     } finally {
+      live = false
       clearInterval(timer)
-      setStep(-1)
+      setBusy(false)
+      setProg(undefined)
     }
   }
 
@@ -92,8 +116,8 @@ export default function App() {
 
         {err && <p className="err" role="alert">{err}</p>}
 
-        <button className="go" onClick={go} disabled={step >= 0}>
-          {step >= 0 ? 'Investigating…' : 'Investigate'}
+        <button className="go" onClick={go} disabled={busy}>
+          {busy ? 'Investigating…' : 'Investigate'}
         </button>
 
         <div className="samples">
@@ -105,27 +129,34 @@ export default function App() {
       </aside>
 
       <main>
-        {step >= 0 && (
+        {busy && (
           <section className="proc" aria-live="polite" aria-busy="true">
             <header>
               <h2>Investigating</h2>
               <code title={current}>{current.length > 70 ? current.slice(0, 70) + '…' : current}</code>
             </header>
-            <ol>
-              {STEPS.map((s, i) => (
-                <li key={s} className={i < step ? 'done' : i === step ? 'now' : ''}>
-                  <span className="ico" aria-hidden="true">{i < step ? '✓' : ''}</span>
-                  <span className="lbl">{s}</span>
-                  {i === step && <span className="dots" aria-hidden="true"><i /><i /><i /></span>}
-                  {i < step && <small>done</small>}
+            <ol ref={listRef}>
+              {stages.length === 0 && (
+                <li className="now">
+                  <span className="ico" aria-hidden="true" />
+                  <span className="lbl">Starting the investigation</span>
+                  <span className="dots" aria-hidden="true"><i /><i /><i /></span>
+                </li>
+              )}
+              {stages.map(s => (
+                <li key={s.id} className={s.status === 'done' ? 'done' : s.status === 'running' ? 'now' : ''}>
+                  <span className="ico" aria-hidden="true">{s.status === 'done' ? '✓' : ''}</span>
+                  <span className="lbl">{s.label}</span>
+                  {s.status === 'running' && <span className="dots" aria-hidden="true"><i /><i /><i /></span>}
+                  {(s.detail || s.status === 'done') && <small>{s.detail || 'done'}</small>}
                 </li>
               ))}
             </ol>
-            <div className="prog"><div style={{ width: ((step + 1) / STEPS.length) * 100 + '%' }} /></div>
+            <div className="prog"><div style={{ width: pct + '%' }} /></div>
           </section>
         )}
 
-        {!res && step < 0 && (
+        {!res && !busy && (
           <div className="empty">
             <div className="strip big"><div className="bar" /></div>
             <h2>Is it safe?</h2>
@@ -133,7 +164,7 @@ export default function App() {
           </div>
         )}
 
-        {res && step < 0 && <Dossier a={res} />}
+        {res && !busy && <Dossier a={res} />}
       </main>
     </div>
   )

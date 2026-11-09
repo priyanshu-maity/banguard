@@ -83,3 +83,9 @@ h3{margin:0 0 10px;font-size:1.15rem;font-weight:700}.lead{font-size:1.2rem;marg
 .hl:hover .tip,.hl:focus .tip{opacity:1;transform:none}
 mark.hl.u-ind{border-bottom-style:dashed;border-bottom-color:var(--ink)}
 .tip b:not(:first-child){margin-top:6px}
+.proc{display:flex;flex-direction:column;max-height:min(78vh,640px)}
+.proc header{flex:none}
+.proc ol{position:relative;flex:1 1 auto;min-height:0;max-height:min(46vh,340px);overflow-y:auto;scrollbar-gutter:stable;scroll-behavior:smooth}
+.proc .lbl{min-width:0}
+.proc small{flex:none}
+.prog{flex:none}

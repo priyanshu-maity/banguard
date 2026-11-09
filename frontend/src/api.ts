@@ -64,7 +64,7 @@ export type BlockchainStatus =
 export type RedirectFlag = 'insecure_http' | 'url_shortener' | 'cross_domain' | 'internal_address'
 
 export interface RedirectHop {
-  url: string // query string and credentials already removed by the backend
+  url: string
   host: string
   role: 'start' | 'redirect' | 'final'
   flags: RedirectFlag[]
@@ -99,11 +99,21 @@ export interface InvestigationResult {
 }
 
 export interface InvestigationRequest {
+  investigation_id: string
   investigation_type: InvestigationType
   url?: string
   message?: string
   /** @deprecated Blockchain submission is now automatic; the backend ignores this. */
   submit_to_blockchain?: boolean
+}
+
+export interface InvestigationProgress {
+  [key: string]: unknown
+}
+
+// Generate a unique ID before starting an investigation.
+export function createInvestigationId(): string {
+  return crypto.randomUUID()
 }
 
 export const riskOf = (value: string): Risk => {
@@ -149,6 +159,15 @@ export async function analyze(input: InvestigationRequest): Promise<Investigatio
   if (!response.success || !response.data?.threat_report) {
     throw new Error('The backend returned an invalid investigation response.')
   }
+
+  return response.data
+}
+
+// Retrieve live progress for an investigation.
+export async function getProgress(investigationId: string): Promise<InvestigationProgress> {
+  const response = await request<{ success: boolean; data: InvestigationProgress }>(
+    `/investigate/${encodeURIComponent(investigationId)}/progress`
+  )
 
   return response.data
 }
