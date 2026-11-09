@@ -22,7 +22,8 @@ PHASE_TIMEOUT_SECONDS = 90  # per phase; unfinished work is reported as failed
 MAX_MESSAGE_CHARS = 10_000
 MAX_URL_CHARS = 2048
 TLS_ALLOWED_PORTS = (443, 8443)  # otherwise TLS errors reveal which ports are open on third-party hosts
-SUBMIT_RISK_LEVELS = (RiskLevel.SUSPICIOUS, RiskLevel.HIGH, RiskLevel.CONFIRMED_MALICIOUS)
+# Reports at these levels are registered on the blockchain automatically. Low Risk reports are not.
+SUBMIT_RISK_LEVELS = (RiskLevel.SUSPICIOUS, RiskLevel.HIGH, RiskLevel.CONFIRMED_MALICIOUS, RiskLevel.INCONCLUSIVE)
 
 _ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{8,64}")
 _BAD_URL_CHARS = re.compile(r"[\s\x00-\x1f\x7f\\]")
@@ -56,6 +57,11 @@ class InvestigationResult:
     report_submission_error: str | None = None
     report_submission_skipped_reason: str | None = None
 
+    # Blockchain Integrity section: show `blockchain_message` as-is, and use `blockchain_status` for styling.
+    # blockchain_status is one of: not_submitted, submitted, submitted_verified, submitted_verification_failed, failed
+    blockchain_status: str = "not_submitted"
+    blockchain_message: str = ""
+
 
 @dataclass
 class _UrlBundle:
@@ -63,6 +69,55 @@ class _UrlBundle:
     m1: AnalysisResult
     m5: AnalysisResult
     tls_targets: list[tuple[str, str, int]] = field(default_factory=list)  # (scheme, host, port)
+
+
+# Blockchain status message
+def _first_value(mapping, keys):
+    if isinstance(mapping, dict):
+        for key in keys:
+            if mapping.get(key) not in (None, ""):
+                return mapping[key]
+    return None
+
+
+def _verification_ok(verification) -> bool | None:
+    """True/False if the verification result says so, None if its outcome cannot be determined."""
+    value = _first_value(verification, ("verified", "is_valid", "valid", "integrity_verified", "match", "matches"))
+    return value if isinstance(value, bool) else None
+
+
+def _blockchain_outcome(investigation: InvestigationResult) -> tuple[str, str]:
+    report = investigation.threat_report
+    label = report.risk_level.value.replace("_", " ").title() if report else "Unknown"
+    note = "The on-chain record proves the report's contents and history have not been altered; it does not prove the report is true."
+
+    if investigation.report_submission is not None:
+        version = _first_value(investigation.report_submission, ("version",))
+        tx = _first_value(investigation.report_submission, ("tx_hash", "transaction_hash", "txHash", "transaction"))
+        reference = f"version {version}" if version is not None else "the latest version"
+        if tx:
+            reference += f", transaction {str(tx)[:66]}"
+        verified = _verification_ok(investigation.report_verification)
+        if verified is True:
+            return "submitted_verified", (
+                f"This {label} report was automatically registered on the blockchain ({reference}) and its integrity "
+                f"was independently verified. {note}")
+        if verified is False:
+            return "submitted_verification_failed", (
+                f"This {label} report was registered on the blockchain ({reference}), but integrity verification "
+                f"did not pass: the on-chain commitment does not match the stored report. Treat the record as unverified.")
+        return "submitted", (
+            f"This {label} report was automatically registered on the blockchain ({reference}). "
+            f"The verification result is available in the details. {note}")
+
+    if investigation.report_submission_error:
+        return "failed", (
+            f"This {label} report qualifies for blockchain registration, but the automatic submission did not complete. "
+            f"The report is still available here, but it is not recorded on-chain.")
+
+    return "not_submitted", (
+        f"Not registered on the blockchain: the assessment is {label}. Only Suspicious, High, Confirmed Malicious "
+        f"or Inconclusive reports are recorded automatically.")
 
 
 # URL handling
@@ -206,8 +261,13 @@ def _run_parallel(tasks: dict[str, Callable], timeout: float) -> dict:
 
 # Entry point
 def run_investigation(url: str | None = None, investigation_id: str | None = None, investigation_type: str = "url",
-                      message: str | None = None, submit_to_blockchain: bool = False) -> InvestigationResult:
-    """Run a URL, message, or combined investigation and generate one unified report."""
+                      message: str | None = None, submit_to_blockchain: bool | None = None) -> InvestigationResult:
+    """Run a URL, message, or combined investigation and generate one unified report.
+
+    Blockchain submission is automatic: Suspicious, High, Confirmed Malicious and Inconclusive reports are
+    registered and verified; Low Risk reports are not. `submit_to_blockchain` is deprecated and ignored; it is
+    only kept so that existing callers do not break.
+    """
 
     if investigation_type not in ("url", "message", "combined"):
         raise ValueError("investigation_type must be 'url', 'message', or 'combined'.")
@@ -320,17 +380,17 @@ def run_investigation(url: str | None = None, investigation_id: str | None = Non
     )
     investigation.threat_report = create_threat_report(investigation_id, assessment)
 
-    # M6: only when requested, and only for results worth sharing.
-    if submit_to_blockchain:
-        if investigation.threat_report.risk_level not in SUBMIT_RISK_LEVELS:
-            investigation.report_submission_skipped_reason = "Only Suspicious, High or Confirmed Malicious reports are submitted."
-        else:
-            try:
-                m6_result = submit_and_verify_report(investigation.threat_report)
-                investigation.report_submission = m6_result["submission"]
-                investigation.report_verification = m6_result["verification"]
-            except Exception:
-                logger.exception("M6 submission failed for %s", investigation_id)
-                investigation.report_submission_error = "Report submission did not complete."
+    # M6: automatic for Suspicious, High, Confirmed Malicious and Inconclusive reports.
+    if investigation.threat_report.risk_level not in SUBMIT_RISK_LEVELS:
+        investigation.report_submission_skipped_reason = "Low Risk reports are not submitted to the blockchain."
+    else:
+        try:
+            m6_result = submit_and_verify_report(investigation.threat_report)
+            investigation.report_submission = m6_result["submission"]
+            investigation.report_verification = m6_result["verification"]
+        except Exception:
+            logger.exception("M6 submission failed for %s", investigation_id)
+            investigation.report_submission_error = "Report submission did not complete."
+    investigation.blockchain_status, investigation.blockchain_message = _blockchain_outcome(investigation)
 
     return investigation
