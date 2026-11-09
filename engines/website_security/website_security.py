@@ -3,10 +3,10 @@ import logging
 from core.fetch_redirect_chain import FetchError
 from core.network_safety import NonPublicAddressError, ResolutionError
 from core.schema import AnalysisResult, AnalysisStatus
-from header_inspector import HeaderInspector
-from page_fetcher import PageFetcher
-from target_resolver import InvalidTargetError, TargetResolver
-from website_security_result import WebsiteSecurityResult
+from .header_inspector import HeaderInspector
+from .page_fetcher import PageFetcher
+from .target_resolver import InvalidTargetError, TargetResolver
+from .website_security_result import WebsiteSecurityResult
 
 logger = logging.getLogger(__name__)
 

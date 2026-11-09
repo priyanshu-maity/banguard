@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 from core.network_safety import normalise_hostname, resolve_public_ips
-from website_security_result import WebsiteSecurityResult
+from .website_security_result import WebsiteSecurityResult
 
 ALLOWED_SCHEMES = ("http", "https")
 ALLOWED_PORTS = (80, 443, 8080, 8443)

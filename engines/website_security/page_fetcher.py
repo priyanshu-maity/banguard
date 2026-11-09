@@ -1,8 +1,8 @@
 from urllib.parse import urlsplit, urlunsplit
 
 from core.fetch_redirect_chain import safe_fetch
-from target_resolver import ResolvedTarget
-from website_security_result import WebsiteSecurityResult
+from .target_resolver import ResolvedTarget
+from .website_security_result import WebsiteSecurityResult
 
 
 def _without_query(url: str) -> str:

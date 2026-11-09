@@ -1,7 +1,7 @@
 import re
 from urllib.parse import urlsplit
 
-from website_security_result import WebsiteSecurityResult
+from .website_security_result import WebsiteSecurityResult
 
 MAX_DETAIL_CHARS = 200
 
