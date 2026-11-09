@@ -245,7 +245,7 @@ export default function Dossier({ a }: { a: InvestigationResult }) {
           <h3>What we could not check</h3>
           <ul className="lim">
             {limits.map((e, k) => <li key={k}>{e.description.replace('Analysis limitation: ', '')}</li>)}
-            {gaps.map((g, k) => <li key={k}>{MOD[g.key] ?? g.key} was {g.status}.</li>)}
+              {gaps.map((g, k) => <li key={k}>{MOD[g.key] ?? g.key} {g.status === 'partial' ? 'only partly completed.' : 'could not be performed.'}</li>)}
           </ul>
         </section>
       )}
