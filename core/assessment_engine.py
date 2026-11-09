@@ -341,6 +341,68 @@ def _m1_context(data) -> dict:
     return {k: v for k, v in context.items() if not _is_empty(v)}
 
 
+def _tls_digest(data) -> dict:
+    """Digestible certificate summary built from the TLS flags, including checks that came back clear."""
+    if data is None:
+        return {}
+
+    def fd(name):
+        return _flag_detail(getattr(data, name, None))
+
+    ok, handshake_reason = fd("https_available")
+    verify_failed, verify_reason = fd("verification_failed")
+    expired, days = fd("certificate_expired")
+    not_yet_valid, not_before = fd("certificate_not_yet_valid")
+    _, age = fd("newly_issued_certificate")
+    mismatch, sans = fd("hostname_mismatch")
+    self_signed, self_issuer = fd("self_signed")
+    unknown, unknown_issuer = fd("unknown_issuer")
+    distrusted, matches = fd("distrusted_ca_match")
+
+    digest: dict = {}
+    if ok is not None:
+        digest["handshake"] = "succeeded" if ok else f"failed ({_clean(handshake_reason or 'reason not reported', 120)})"
+    if verify_failed is not None:
+        digest["chain_verification"] = f"failed ({_clean(verify_reason or 'reason not reported', 120)})" if verify_failed else "passed"
+    if not_yet_valid:
+        digest["validity"] = f"not yet valid (starts {_clean(not_before or 'unknown', 40)})"
+    elif expired is True:
+        digest["validity"] = "expired" + (f" {abs(days)} days ago" if isinstance(days, int) else "")
+    elif expired is False:
+        digest["validity"] = "currently valid" + (f", {days} days remaining" if isinstance(days, int) else "")
+    if isinstance(age, int):
+        digest["age"] = f"issued {age} days ago"
+    if mismatch is not None:
+        digest["hostname"] = "NOT covered by the certificate's SANs" if mismatch else "covered by the certificate's SANs"
+    if isinstance(sans, list) and sans:
+        digest["san_count"] = len(sans)
+        digest["san_sample"] = [_clean(x, 80) for x in sans[:6]]
+    issuer = self_issuer or unknown_issuer
+    if issuer:
+        digest["issuer"] = _clean(issuer, 100)
+    if self_signed:
+        digest["trust"] = "self-signed"
+    elif unknown:
+        digest["trust"] = "chain does not lead to a trusted root"
+    elif unknown is False and self_signed is False:
+        digest["trust"] = "chains to a trusted root"
+    if distrusted is not None:
+        digest["distrust_list"] = f"MATCH: {_clean_detail(matches)}" if distrusted else "no match on the local distrust list"
+    return digest
+
+
+def _tls_line(target: str, entry: dict) -> str:
+    """One-sentence certificate description for the report."""
+    digest = entry.get("certificate") or {}
+    if not digest:
+        note = entry.get("note") or f"status {entry.get('status', 'unknown')}"
+        return f"TLS certificate for {target} was not analysed: {note}"
+    order = ("handshake", "chain_verification", "validity", "age", "hostname", "issuer", "trust", "distrust_list")
+    labels = {"handshake": "handshake {}", "chain_verification": "chain verification {}", "issuer": "issuer {}", "distrust_list": "{}"}
+    parts = [labels.get(k, "{}").format(digest[k]) for k in order if k in digest]
+    return f"TLS certificate for {target}: " + "; ".join(parts) + "."
+
+
 def _read_message(data, signals: list[Signal]) -> dict:
     section = _read_module(data, "M3", "message", signals)
     if data is None:
@@ -401,7 +463,13 @@ def _build_dossier(m1_result, m2_results, m3_result, m4_result, m5_result, inves
     tls = []
     for reference, result in _items(m2_results):
         scope = _clean(reference, 100) if reference else "tls"
-        tls.append({"target": scope, "status": _status_of(result), **_read_module(_unwrap(result), "M2", scope, signals)})
+        data = _unwrap(result)
+        entry = {"target": scope, "status": _status_of(result)}
+        if getattr(result, "error", None):
+            entry["note"] = _clean(result.error, 200)
+        entry["certificate"] = _tls_digest(data)
+        entry.update(_read_module(data, "M2", scope, signals))
+        tls.append(entry)
 
     dossier = {
         "investigation_type": investigation_type,
@@ -501,6 +569,10 @@ evidence-grounded security assessment for non-expert users.
 INPUT
 You receive a JSON dossier. Each analyzer section lists signals that FIRED (each with an id such as "S3" and optional detail), \
 signals that were checked and were "clear", and signals "not_evaluated" (the check did not run or returned nothing). \
+Each "tls_targets" entry also carries a "certificate" digest (handshake, chain verification, validity, age, hostname coverage, \
+issuer, trust, distrust-list result) and a "note" when TLS analysis was skipped or failed; use it as context even when nothing fired. \
+When TLS data exists, mention the certificate state briefly in the summary, and remember that a valid certificate proves only an encrypted \
+connection and certificate identity, never that the site is legitimate.
 The dossier also has module statuses and "evidence_coverage" (0-1, share of expected checks that produced a usable result).
 
 SECURITY RULES
@@ -813,10 +885,22 @@ def collect_assessment_evidence(investigation_id, original_url="", m1_result=Non
     # Findings: the LLM's grounded findings, plus a plain finding for any medium/high risk signal it skipped.
     cited = llm["cited"] if llm else set()
     output.findings = list(llm["findings"]) if llm else []
+    tls_lines: list[tuple[str, str]] = []
     for signal in signals:
         if signal.id not in cited and signal.spec.role in ("risk", "hygiene") and (
                 llm is None or signal.spec.severity in ("medium", "high")):
             output.findings.append(_finding_from_signal(signal))
+    for entry in dossier.get("tls_targets", []):
+        line = _tls_line(entry["target"], entry)
+        output.findings.append(ReportFinding(
+            title=f"TLS certificate ({entry['target']})",
+            description=line[:700],
+            severity="info",
+            source_module="M2",
+            impact="A valid certificate proves an encrypted connection and certificate identity, not that the website is legitimate.",
+            remediation=None,
+        ))
+        tls_lines.append((entry["target"], line))
     output.findings.sort(key=lambda f: -_SEV_RANK.get(str(f.severity).lower(), 0))
 
     # Narrative
@@ -833,6 +917,8 @@ def collect_assessment_evidence(investigation_id, original_url="", m1_result=Non
     output.limitations = list(dict.fromkeys(limitations))[:MAX_LIST_ITEMS]
 
     _build_evidence(output, signals, notes)
+    for target, line in tls_lines:
+        output.evidence.append(ReportEvidence(source_module="M2", description=line, reference=target))
     output.indicators = _collect_indicators(output, investigation_id, original_url, m1_result, m3_result, m5_result)
     return output
 
