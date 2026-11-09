@@ -1,4 +1,4 @@
-import { Component } from 'react'
+import { Component, Fragment } from 'react'
 import type { ReactNode, SyntheticEvent } from 'react'
 import type { Evidence, Indicator } from './api'
 
@@ -97,30 +97,38 @@ function HighlighterInner({ text, evidence, indicators }: Props) {
   }
 
   const P = locate(phrases), I = locate(inds)
-  const keepP = resolve(P.hits, h => rank[h.m.sev])
   const keepI = resolve(I.hits, () => 0)
 
-  // Phrases and links are resolved separately, then layered: a link inside a flagged phrase keeps its underline.
-  const cuts = [...new Set([0, text.length, ...keepP.flatMap(h => [h.s, h.e]), ...keepI.flatMap(h => [h.s, h.e])])].sort((a, b) => a - b)
+  // Layering rules, applied to each stretch of text:
+  //  1. a link, phone number or address is underline-only: no phrase colour is drawn under it
+  //  2. where phrases overlap, only the strongest (then the longest) is coloured, so mild never covers
+  //     moderate or strong, and moderate never covers strong
+  const cuts = [...new Set([0, text.length, ...P.hits.flatMap(h => [h.s, h.e]), ...keepI.flatMap(h => [h.s, h.e])])].sort((a, b) => a - b)
+  const winners = new Set<Hit>()
   const parts: ReactNode[] = []
   for (let n = 0; n < cuts.length - 1; n++) {
     const a = cuts[n], b = cuts[n + 1], slice = text.slice(a, b)
-    const p = keepP.find(h => h.s <= a && h.e >= b)
+    const covering = P.hits.filter(h => h.s <= a && h.e >= b)
+      .sort((x, y) => rank[y.m.sev] - rank[x.m.sev] || (y.e - y.s) - (x.e - x.s))
     const i = keepI.find(h => h.s <= a && h.e >= b)
-    if (!p && !i) { parts.push(slice); continue }
+    if (!covering.length && !i) { parts.push(slice); continue }
+    const p = i ? undefined : covering[0]
+    if (p) winners.add(p)
+    const reasons = new Map<string, Mark>()
+    covering.forEach(h => { if (!reasons.has(h.m.title)) reasons.set(h.m.title, h.m) })
     parts.push(
-      <mark key={a} tabIndex={0} onMouseEnter={place} onFocus={place} className={'hl ' + (p ? 'h-' + p.m.sev : 'h-ind') + (p && i ? ' u-ind' : '')}>
+      <mark key={a} tabIndex={0} onMouseEnter={place} onFocus={place} className={'hl ' + (p ? 'h-' + p.m.sev : 'h-ind')}>
         {slice}
         <span role="tooltip" className="tip">
-          {p && <><b>{p.m.title}</b>{p.m.reason}</>}
           {i && <><b>{i.m.title}</b>{i.m.reason}</>}
+          {[...reasons.values()].map(m => <Fragment key={m.title}><b>{m.title}</b>{m.reason}</Fragment>)}
         </span>
       </mark>
     )
   }
 
-  const count = (sev: Sev) => keepP.filter(h => h.m.sev === sev).length
-  const marked = keepP.length + keepI.length
+  const count = (sev: Sev) => [...winners].filter(h => h.m.sev === sev).length
+  const marked = winners.size + keepI.length
 
   return (
     <>
